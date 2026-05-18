@@ -6,6 +6,7 @@ if (typeof window.api === 'undefined') {
       recentProjects: ['C:\\mock-workspace', 'C:\\another-project'],
       lastActiveProject: null
     }),
+    clearActiveProject: async () => ({ success: true }),
     loadProjectData: async (dir) => ({
       config: {
         environments: ['local', 'dev', 'staging', 'production'],
@@ -30,11 +31,10 @@ if (typeof window.api === 'undefined') {
     }),
     saveProjectData: async (dir, config, target) => ({ success: true }),
     logEvent: (level, msg) => console.log(`[Mock ${level}] ${msg}`),
-    testConnection: async (val, type) => {
-      return new Promise(resolve => setTimeout(() => {
-        resolve({ status: val.includes('fail') || val.includes('error') ? 'error' : 'success' });
-      }, 800));
-    },
+    testConnection: async () => ({
+      status: 'error',
+      message: 'Connection checks run in the Electron app only'
+    }),
     getSystemInfo: async () => ({ appVersion: '1.0.0-alpha (Mock)' })
   };
 }
@@ -53,10 +53,24 @@ let state = {
 };
 
 // DOM Elements
+const viewWorkspace = document.getElementById('view-workspace');
 const btnOpenProject = document.getElementById('menu-open-project');
 const btnCenterOpen = document.getElementById('btn-center-open');
 const btnSaveEnv = document.getElementById('btn-save-env');
 const projectPathDisplay = document.getElementById('project-path-display');
+const projectNameHeader = document.getElementById('project-name-header');
+const topPathIndicator = document.getElementById('top-path-indicator');
+const closeProjectButtons = [
+  document.getElementById('menu-close-project'),
+  document.getElementById('sidebar-close-project'),
+  document.getElementById('btn-close-project')
+].filter(Boolean);
+const openProjectButtons = [
+  btnOpenProject,
+  btnCenterOpen,
+  document.getElementById('sidebar-open-project'),
+  document.getElementById('btn-switch-project')
+].filter(Boolean);
 const targetEnvSelect = document.getElementById('target-env-file');
 const variablesContainer = document.getElementById('variables-container');
 const consoleOutput = document.getElementById('console-output');
@@ -129,7 +143,7 @@ function showToast(msg) {
 }
 
 // Background Connections Health Cache
-let connectionStatusCache = {}; // maps keyName -> 'success' | 'failed' | 'testing' | 'untested'
+let connectionStatusCache = {}; // maps keyName -> 'success' | 'auth_error' | 'failed' | 'testing' | 'untested'
 
 function updateWorkspaceMeta() {
   const keyCount = Object.keys(state.keys || {}).length;
@@ -188,16 +202,33 @@ async function triggerBackgroundPings() {
     connectionStatusCache[keyName] = 'testing';
     updateHealthBadges();
 
-    // Call async test
-    window.api.testConnection(val, type).then(res => {
-      connectionStatusCache[keyName] = res.status === 'success' ? 'success' : 'failed';
-      updateHealthBadges();
-      
+    window.api.testConnection({
+      value: val,
+      type,
+      keyName,
+      environment: env,
+      projectKeys: state.keys
+    }).then(res => {
       if (res.status === 'success') {
-        logEvent(`Connection Successful for variable ${keyName} (${type})`, 'INFO');
+        connectionStatusCache[keyName] = 'success';
+      } else if (res.status === 'auth_error') {
+        connectionStatusCache[keyName] = 'auth_error';
       } else {
-        logEvent(`Connection Verification Failed for ${keyName} (${type}): ${res.error || 'unreachable'}`, 'WARN');
+        connectionStatusCache[keyName] = 'failed';
       }
+      updateHealthBadges();
+
+      if (res.status === 'success') {
+        logEvent(`Connection successful for ${keyName} (${type}): ${res.message}`, 'INFO');
+      } else if (res.status === 'auth_error') {
+        logEvent(`Auth rejected for ${keyName} (${type}): ${res.message}`, 'WARN');
+      } else {
+        logEvent(`Connection failed for ${keyName} (${type}): ${res.message || res.error || 'unreachable'}`, 'WARN');
+      }
+    }).catch(err => {
+      connectionStatusCache[keyName] = 'failed';
+      updateHealthBadges();
+      logEvent(`Connection failed for ${keyName} (${type}): ${err.message}`, 'ERROR');
     });
   }
 }
@@ -216,12 +247,14 @@ function updateHealthBadges() {
 
     // Aggregate health for keys in this group
     let hasFailed = false;
+    let hasAuthError = false;
     let hasTesting = false;
     let hasSuccess = false;
 
     keysList.forEach(k => {
       const status = connectionStatusCache[k] || 'untested';
       if (status === 'failed') hasFailed = true;
+      if (status === 'auth_error') hasAuthError = true;
       if (status === 'testing') hasTesting = true;
       if (status === 'success') hasSuccess = true;
     });
@@ -230,6 +263,9 @@ function updateHealthBadges() {
     if (hasFailed) {
       badge.classList.add('failed');
       textSpan.innerText = 'Failed';
+    } else if (hasAuthError) {
+      badge.classList.add('auth-error');
+      textSpan.innerText = 'Auth Error';
     } else if (hasTesting) {
       badge.classList.add('testing');
       textSpan.innerText = 'Testing';
@@ -516,9 +552,11 @@ function renderServiceGroups(filter = '') {
     variablesContainer.innerHTML = `
       <div class="empty-state">
         <h3>No Project Open</h3>
-        <p>Click "Open Project" to load a workspace.</p>
-        <button class="btn btn-primary mt-3" onclick="document.getElementById('menu-open-project').click()">Open Project</button>
+        <p>Open a project folder from the sidebar, title bar, or pick a recent project below.</p>
+        <button class="btn btn-primary mt-3" id="btn-center-open-dynamic" type="button">Open Project</button>
       </div>`;
+    const dynamicOpenBtn = document.getElementById('btn-center-open-dynamic');
+    if (dynamicOpenBtn) dynamicOpenBtn.addEventListener('click', handleOpenProject);
     return;
   }
 
@@ -879,21 +917,73 @@ btnAddEnv.addEventListener('click', () => {
   showToast(`${val} Environment Added`);
 });
 
+function updateProjectChrome() {
+  const hasProject = Boolean(state.activeProjectPath);
+
+  if (viewWorkspace) {
+    viewWorkspace.classList.toggle('has-active-project', hasProject);
+  }
+
+  closeProjectButtons.forEach(btn => {
+    btn.disabled = !hasProject;
+  });
+
+  if (hasProject) {
+    const folderName = state.activeProjectPath.split(/[\\/]/).pop();
+    projectPathDisplay.innerText = state.activeProjectPath;
+    projectPathDisplay.title = state.activeProjectPath;
+    if (projectNameHeader) projectNameHeader.innerText = folderName;
+    if (topPathIndicator) {
+      topPathIndicator.innerText = state.activeProjectPath;
+      topPathIndicator.title = state.activeProjectPath;
+    }
+  } else {
+    projectPathDisplay.innerText = 'No Project Open';
+    projectPathDisplay.removeAttribute('title');
+    if (projectNameHeader) projectNameHeader.innerText = 'No Project Open';
+    if (topPathIndicator) {
+      topPathIndicator.innerText = 'Open a project folder to manage environment variables';
+      topPathIndicator.removeAttribute('title');
+    }
+  }
+
+  renderRecentProjectsList();
+}
+
+async function closeProject() {
+  if (!state.activeProjectPath) return;
+
+  const closedPath = state.activeProjectPath;
+  logEvent(`Closing workspace: ${closedPath}`, 'INFO');
+
+  state.activeProjectPath = null;
+  state.keys = {};
+  state.environments = ['local', 'test', 'deployment'];
+  state.activeEnvironment = 'local';
+  state.availableFiles = [];
+  state.selectedTargetFile = '.env.local';
+  connectionStatusCache = {};
+
+  if (searchInput) searchInput.value = '';
+
+  try {
+    await window.api.clearActiveProject();
+  } catch (err) {
+    console.error('Failed to clear active project:', err);
+  }
+
+  updateProjectChrome();
+  renderServiceGroups();
+  showToast('Project closed');
+}
+
 // Load Project Handler
 async function loadProject(dir) {
   if (!dir) return;
   
   try {
     state.activeProjectPath = dir;
-    projectPathDisplay.innerText = dir;
-    
-    // Update top path indicator
-    const topIndicator = document.getElementById('top-path-indicator');
-    if (topIndicator) {
-      topIndicator.innerText = dir;
-    }
-    
-    document.getElementById('project-name-header').innerText = dir.split(/[\\/]/).pop();
+    updateProjectChrome();
     logEvent(`Loading workspace: ${dir}`);
     
     const data = await window.api.loadProjectData(dir);
@@ -965,8 +1055,8 @@ async function handleOpenProject() {
   }
 }
 
-btnOpenProject.addEventListener('click', handleOpenProject);
-btnCenterOpen.addEventListener('click', handleOpenProject);
+openProjectButtons.forEach(btn => btn.addEventListener('click', handleOpenProject));
+closeProjectButtons.forEach(btn => btn.addEventListener('click', closeProject));
 
 // Sync Recent Projects Sidebar List
 async function refreshRecentProjects() {
@@ -991,7 +1081,8 @@ function renderRecentProjectsList() {
   
   state.recentProjects.forEach(p => {
     const li = document.createElement('li');
-    li.className = 'recent-project-item';
+    const isActive = state.activeProjectPath && p === state.activeProjectPath;
+    li.className = `recent-project-item${isActive ? ' active' : ''}`;
     const folderName = p.split(/[\\/]/).pop();
     li.innerHTML = `
       <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
@@ -1080,14 +1171,18 @@ async function initApp() {
   try {
     const { recentProjects, lastActiveProject } = await window.api.getRecentProjects();
     state.recentProjects = recentProjects || [];
-    renderRecentProjectsList();
-    
+    updateProjectChrome();
+
     if (lastActiveProject) {
       logEvent(`Auto-loading last active workspace: ${lastActiveProject}`, 'INFO');
       await loadProject(lastActiveProject);
+    } else {
+      renderServiceGroups();
     }
   } catch (err) {
     console.error('App init failed:', err);
+    updateProjectChrome();
+    renderServiceGroups();
   }
 }
 

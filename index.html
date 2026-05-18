@@ -8,22 +8,15 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="styles.css?v=14">
+  <link rel="stylesheet" href="styles.css?v=15">
 </head>
 <body>
 
   <!-- Custom Sleek Window Titlebar -->
   <div class="custom-titlebar">
-    <div class="tb-left-controls">
-      <button class="tb-btn" id="sidebar-toggle" title="Toggle Sidebar">
-        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-          <rect x="3" y="3" width="18" height="18" rx="2"/>
-          <line x1="9" y1="3" x2="9" y2="21"/>
-        </svg>
-      </button>
-    </div>
-    <div class="tb-menu">
-      <button class="menu-btn" id="menu-open-project">Open Project</button>
+    <div class="tb-menu project-menu">
+      <button class="menu-btn menu-btn-accent" id="menu-open-project" type="button" title="Open or switch project folder">Open Project</button>
+      <button class="menu-btn" id="menu-close-project" type="button" title="Close current workspace" disabled>Close Project</button>
     </div>
     <div class="tb-drag-handle"></div>
   </div>
@@ -60,6 +53,17 @@
         </a>
       </nav>
 
+      <div class="sidebar-project-actions">
+        <button class="btn btn-primary sidebar-action-btn" id="sidebar-open-project" type="button">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
+          Open Project
+        </button>
+        <button class="btn btn-secondary sidebar-action-btn" id="sidebar-close-project" type="button" disabled>
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+          Close Project
+        </button>
+      </div>
+
       <!-- Recent Projects List -->
       <div class="recent-projects">
         <h3>Recent Projects</h3>
@@ -85,11 +89,15 @@
         <!-- Row 1: Workspace Top Bar -->
         <div class="workspace-top-bar">
           <div class="title-section">
-            <h2 class="section-title" id="project-name-header">Environment Variables</h2>
-            <div class="project-path-indicator" id="top-path-indicator">No Project Open</div>
+            <h2 class="section-title" id="project-name-header">No Project Open</h2>
+            <div class="project-path-indicator" id="top-path-indicator">Open a project folder to manage environment variables</div>
+            <div class="workspace-project-actions" id="workspace-project-actions">
+              <button class="btn btn-secondary btn-compact" id="btn-switch-project" type="button">Switch Project</button>
+              <button class="btn btn-ghost btn-compact" id="btn-close-project" type="button">Close Project</button>
+            </div>
           </div>
           
-          <div class="primary-actions">
+          <div class="primary-actions" id="workspace-primary-actions">
             <button class="btn btn-secondary" id="btn-sync-project" title="Force Sync Workspace and Settings">
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="margin-right:4px; vertical-align: middle;"><path d="M23 4v6h-6M1 20v-6h6"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg>
               Sync Workspace
@@ -101,6 +109,7 @@
           </div>
         </div>
 
+        <div id="workspace-project-panel" class="workspace-project-panel">
         <div class="workspace-summary" aria-label="Workspace summary">
           <div class="summary-item">
             <span class="summary-label">Keys</span>
@@ -156,13 +165,14 @@
             </div>
           </div>
         </div>
+        </div>
 
         <!-- Service Groups Container -->
         <div class="variables-list" id="variables-container">
-          <div class="empty-state">
+          <div class="empty-state" id="workspace-empty-state">
             <h3>No Project Open</h3>
-            <p>Click "Open Project" to load a workspace.</p>
-            <button class="btn btn-primary mt-3" id="btn-center-open">Open Project</button>
+            <p>Open a project folder from the sidebar, title bar, or pick a recent project below.</p>
+            <button class="btn btn-primary mt-3" id="btn-center-open" type="button">Open Project</button>
           </div>
         </div>
       </section>

@@ -1,9 +1,9 @@
 const { app, BrowserWindow, ipcMain, dialog, shell } = require('electron');
 const path = require('path');
 const fs = require('fs');
-const net = require('net');
 const https = require('https');
 const envParser = require('./env-parser');
+const { runConnectionTest } = require('./connection-validators');
 
 function checkManualUpdates() {
   const currentVersion = app.getVersion(); // e.g., '1.0.0'
@@ -17,6 +17,10 @@ function checkManualUpdates() {
     let data = '';
     res.on('data', (chunk) => data += chunk);
     res.on('end', () => {
+      if (res.statusCode !== 200) {
+        logToFile(`Update check skipped: GitHub API returned ${res.statusCode}`, 'INFO');
+        return;
+      }
       try {
         const release = JSON.parse(data);
         if (!release || !release.tag_name) return;
@@ -48,10 +52,11 @@ function checkManualUpdates() {
   });
 }
 
-// Simple semver comparison helper (current < latest)
+// Simple semver comparison helper (current < latest); strips v-prefix and prerelease suffix
 function isNewerVersion(current, latest) {
-  const cParts = current.split('.').map(Number);
-  const lParts = latest.split('.').map(Number);
+  const normalize = (v) => v.replace(/^v/, '').replace(/-.*$/, '');
+  const cParts = normalize(current).split('.').map(Number);
+  const lParts = normalize(latest).split('.').map(Number);
   for (let i = 0; i < 3; i++) {
     if (lParts[i] > cParts[i]) return true;
     if (lParts[i] < cParts[i]) return false;
@@ -141,6 +146,12 @@ function addRecentProject(projectPath) {
   saveGlobalConfig(config);
 }
 
+function clearActiveProject() {
+  const config = getGlobalConfig();
+  config.lastActiveProject = null;
+  saveGlobalConfig(config);
+}
+
 app.whenReady().then(() => {
   logToFile('Application Started', 'INFO');
 
@@ -158,6 +169,12 @@ app.whenReady().then(() => {
   // Recent Projects IPC
   ipcMain.handle('get-recent-projects', () => {
     return getGlobalConfig();
+  });
+
+  ipcMain.handle('clear-active-project', () => {
+    clearActiveProject();
+    logToFile('Active workspace closed by user', 'INFO');
+    return { success: true };
   });
 
   // Logging IPC
@@ -298,52 +315,27 @@ app.whenReady().then(() => {
   });
 
   // Test connection ping
-  ipcMain.handle('test-connection', async (event, url, type) => {
-    logToFile(`Pinging connection [${type}] for ${url}...`, 'INFO');
-    
-    return new Promise((resolve) => {
-      // Fallback pseudo-checker for UI mockup right now since dynamic pinging can be complex
-      // We will actually implement a basic TCP check for postgres
-      if (type === 'tcp') {
-        try {
-          // url e.g. postgresql://user:pass@localhost:5432/db
-          const parsedUrl = new URL(url);
-          const port = parsedUrl.port || 5432;
-          const host = parsedUrl.hostname || 'localhost';
-          
-          const socket = new net.Socket();
-          socket.setTimeout(2500); // 2.5s timeout
-          
-          socket.on('connect', () => {
-            socket.destroy();
-            logToFile(`TCP Connection SUCCESS to ${host}:${port}`, 'INFO');
-            resolve({ status: 'success', color: 'green', message: 'TCP Connection OK' });
-          });
-          
-          socket.on('timeout', () => {
-            socket.destroy();
-            logToFile(`TCP Connection TIMEOUT to ${host}:${port}`, 'ERROR');
-            resolve({ status: 'error', color: 'red', message: 'Connection Timeout' });
-          });
-          
-          socket.on('error', (err) => {
-            logToFile(`TCP Connection ERROR to ${host}:${port} - ${err.message}`, 'ERROR');
-            resolve({ status: 'error', color: 'red', message: err.message });
-          });
-          
-          socket.connect(port, host);
-        } catch(e) {
-          logToFile(`TCP Connection URL PARSE ERROR - ${e.message}`, 'ERROR');
-          resolve({ status: 'error', color: 'red', message: 'Invalid URL Format' });
-        }
-      } else {
-        // Fallback for http/supabase/clerk/etc
-        setTimeout(() => {
-          logToFile(`Mock connection SUCCESS for ${type}`, 'INFO');
-          resolve({ status: 'success', color: 'green', message: 'Connection OK' });
-        }, 1000);
-      }
-    });
+  ipcMain.handle('test-connection', async (event, payload) => {
+    const type = payload?.type || 'none';
+    const keyName = payload?.keyName || 'unknown';
+    logToFile(`Pinging connection [${type}] for key ${keyName}...`, 'INFO');
+
+    try {
+      const result = await runConnectionTest(payload);
+      const level = result.status === 'success' ? 'INFO' : result.status === 'auth_error' ? 'WARN' : 'ERROR';
+      logToFile(`Connection [${type}] ${keyName}: ${result.message}`, level);
+      return result;
+    } catch (err) {
+      logToFile(`Connection [${type}] ${keyName} failed: ${err.message}`, 'ERROR');
+      return {
+        status: 'error',
+        severity: 'error',
+        message: err.message,
+        color: 'red',
+        error: err.message,
+        checkedAt: new Date().toISOString()
+      };
+    }
   });
 
   createWindow();

@@ -6,7 +6,8 @@ contextBridge.exposeInMainWorld('api', {
   logEvent: (level, message) => ipcRenderer.send('log-event', { level, message }),
   selectProjectDir: () => ipcRenderer.invoke('select-project-dir'),
   getRecentProjects: () => ipcRenderer.invoke('get-recent-projects'),
+  clearActiveProject: () => ipcRenderer.invoke('clear-active-project'),
   loadProjectData: (projectPath) => ipcRenderer.invoke('load-project-data', projectPath),
   saveProjectData: (projectPath, config, targetFile) => ipcRenderer.invoke('save-project-data', projectPath, config, targetFile),
-  testConnection: (url, type) => ipcRenderer.invoke('test-connection', url, type)
+  testConnection: (payload) => ipcRenderer.invoke('test-connection', payload)
 });
