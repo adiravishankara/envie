@@ -52,7 +52,7 @@ function parse(content) {
 /**
  * Stringifies the structured project config into standard .env format.
  * @param {object} keys - The keys object from envie.json
- * @param {string} activeEnv - The current active environment (e.g. 'local')
+ * @param {string} activeEnv - The fallback active environment (e.g. 'local')
  * @returns {string} Compiled .env file content
  */
 function stringify(keys, activeEnv) {
@@ -66,8 +66,9 @@ function stringify(keys, activeEnv) {
       }
     }
     
-    // Get the value for the active environment
-    let val = keyData.values[activeEnv] || '';
+    // Get the value for this key's selected environment, falling back to the workspace preset.
+    const selectedEnv = keyData.active || activeEnv;
+    let val = keyData.values[selectedEnv] || '';
     
     // If value contains spaces, wrap in double quotes
     if (val.includes(' ') && !val.startsWith('"') && !val.endsWith('"')) {

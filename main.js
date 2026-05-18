@@ -1,8 +1,65 @@
-const { app, BrowserWindow, ipcMain, dialog } = require('electron');
+const { app, BrowserWindow, ipcMain, dialog, shell } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const net = require('net');
+const https = require('https');
 const envParser = require('./env-parser');
+
+function checkManualUpdates() {
+  const currentVersion = app.getVersion(); // e.g., '1.0.0'
+  const options = {
+    hostname: 'api.github.com',
+    path: '/repos/adiravishankara/envie/releases/latest',
+    headers: { 'User-Agent': 'Envie-App' } // GitHub API requires a User-Agent header
+  };
+
+  https.get(options, (res) => {
+    let data = '';
+    res.on('data', (chunk) => data += chunk);
+    res.on('end', () => {
+      try {
+        const release = JSON.parse(data);
+        if (!release || !release.tag_name) return;
+
+        // Clean the tag (e.g., convert 'v1.1.0' to '1.1.0')
+        const latestVersion = release.tag_name.replace(/^v/, '');
+
+        // Standard semver comparison
+        if (isNewerVersion(currentVersion, latestVersion)) {
+          dialog.showMessageBox({
+            type: 'info',
+            title: 'New Version Available!',
+            message: `A new version (v${latestVersion}) of Envie is available. You are currently on v${currentVersion}.`,
+            detail: release.body || 'No release notes provided.',
+            buttons: ['Download Update', 'Cancel']
+          }).then((result) => {
+            if (result.response === 0) {
+              // Open the download/release page in the user's default browser
+              shell.openExternal(release.html_url);
+            }
+          });
+        }
+      } catch (err) {
+        console.error('Failed to parse release data:', err);
+      }
+    });
+  }).on('error', (err) => {
+    console.error('Failed to check for updates:', err);
+  });
+}
+
+// Simple semver comparison helper (current < latest)
+function isNewerVersion(current, latest) {
+  const cParts = current.split('.').map(Number);
+  const lParts = latest.split('.').map(Number);
+  for (let i = 0; i < 3; i++) {
+    if (lParts[i] > cParts[i]) return true;
+    if (lParts[i] < cParts[i]) return false;
+  }
+  return false;
+}
+
+
 
 // Basic logger to AppData
 function logToFile(msg, type = 'INFO') {
@@ -45,6 +102,45 @@ function createWindow() {
   });
 }
 
+// Global Configuration Registry for Recent Projects
+const globalConfigPath = path.join(app.getPath('userData'), 'envie-global-config.json');
+
+function getGlobalConfig() {
+  try {
+    if (fs.existsSync(globalConfigPath)) {
+      return JSON.parse(fs.readFileSync(globalConfigPath, 'utf8'));
+    }
+  } catch (err) {
+    logToFile(`Error reading global config: ${err.message}`, 'ERROR');
+  }
+  return { recentProjects: [], lastActiveProject: null };
+}
+
+function saveGlobalConfig(config) {
+  try {
+    fs.writeFileSync(globalConfigPath, JSON.stringify(config, null, 2), 'utf8');
+  } catch (err) {
+    logToFile(`Error saving global config: ${err.message}`, 'ERROR');
+  }
+}
+
+function addRecentProject(projectPath) {
+  if (!projectPath) return;
+  const config = getGlobalConfig();
+  let recents = config.recentProjects || [];
+  
+  // Clean duplicates
+  recents = recents.filter(p => p !== projectPath);
+  // Add to front
+  recents.unshift(projectPath);
+  // Limit to 10 recents
+  recents = recents.slice(0, 10);
+  
+  config.recentProjects = recents;
+  config.lastActiveProject = projectPath;
+  saveGlobalConfig(config);
+}
+
 app.whenReady().then(() => {
   logToFile('Application Started', 'INFO');
 
@@ -55,7 +151,13 @@ app.whenReady().then(() => {
       electron: process.versions.electron,
       platform: process.platform,
       arch: process.arch,
+      appVersion: app.getVersion()
     };
+  });
+
+  // Recent Projects IPC
+  ipcMain.handle('get-recent-projects', () => {
+    return getGlobalConfig();
   });
 
   // Logging IPC
@@ -80,6 +182,9 @@ app.whenReady().then(() => {
     logToFile(`Loading project: ${projectPath}`, 'INFO');
     const envieConfigPath = path.join(projectPath, '.envie', 'config.json');
     
+    // Track loaded project in recents list
+    addRecentProject(projectPath);
+    
     // Ensure .gitignore is protecting us
     envParser.ensureGitignored(projectPath);
 
@@ -87,8 +192,18 @@ app.whenReady().then(() => {
     let externalDesync = false;
     let parsedEnvLocal = null;
 
-    // Scan for available .env files
-    const availableFiles = fs.readdirSync(projectPath).filter(file => file.startsWith('.env') && !file.endsWith('.bak'));
+    // Scan for available .env files, ensuring they are actual files and not .envie directory or files
+    const availableFiles = fs.readdirSync(projectPath).filter(file => {
+      try {
+        const fullPath = path.join(projectPath, file);
+        return file.startsWith('.env') && 
+               !file.endsWith('.bak') && 
+               file !== '.envie' && 
+               fs.statSync(fullPath).isFile();
+      } catch (e) {
+        return false;
+      }
+    });
     let activeTargetFile = availableFiles.includes('.env.local') ? '.env.local' : (availableFiles.length > 0 ? availableFiles[0] : '.env');
 
     if (fs.existsSync(envieConfigPath)) {
@@ -102,10 +217,11 @@ app.whenReady().then(() => {
           const rawContent = fs.readFileSync(targetPath, 'utf8');
           parsedEnvLocal = envParser.parse(rawContent);
           
-          // Basic diff check logic: check if keys match the active env in config
+          // Basic diff check logic: check if keys match each key's selected env in config
           const activeEnv = config.activeEnvironment || 'local';
           for (const [k, v] of Object.entries(parsedEnvLocal)) {
-            if (!config.keys[k] || config.keys[k].values[activeEnv] !== v.value) {
+            const selectedEnv = config.keys[k]?.active || activeEnv;
+            if (!config.keys[k] || config.keys[k].values[selectedEnv] !== v.value) {
               externalDesync = true;
               break;
             }
@@ -153,6 +269,10 @@ app.whenReady().then(() => {
   // Save project
   ipcMain.handle('save-project-data', async (event, projectPath, config, targetFile) => {
     try {
+      if (targetFile === '.envie') {
+        throw new Error('Target output file cannot be .envie');
+      }
+      
       logToFile(`Saving project config to .envie/config.json and applying to ${targetFile}...`, 'INFO');
       
       // Save JSON
@@ -227,6 +347,9 @@ app.whenReady().then(() => {
   });
 
   createWindow();
+
+  // Check for updates 5 seconds after startup
+  setTimeout(checkManualUpdates, 5000);
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) {

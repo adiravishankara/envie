@@ -1,3 +1,44 @@
+// Mock Electron APIs when running in standard web browser (for headless testing/UI presentation)
+if (typeof window.api === 'undefined') {
+  window.api = {
+    selectProjectDir: async () => 'C:\\mock-workspace',
+    getRecentProjects: async () => ({
+      recentProjects: ['C:\\mock-workspace', 'C:\\another-project'],
+      lastActiveProject: null
+    }),
+    loadProjectData: async (dir) => ({
+      config: {
+        environments: ['local', 'dev', 'staging', 'production'],
+        activeEnvironment: 'local',
+        keys: {
+          'NEXT_PUBLIC_SUPABASE_URL': { values: { 'local': 'https://local-sb.co', 'dev': 'https://dev-sb.co', 'staging': 'https://staging-sb.co', 'production': 'https://supabase.co' }, note: 'Supabase REST Endpoint', validation: { type: 'supabase' } },
+          'NEXT_PUBLIC_SUPABASE_ANON_KEY': { values: { 'local': 'eyJhbG...', 'dev': 'eyJhbG...', 'staging': 'eyJhbG...', 'production': 'eyJhbG...' }, note: 'Anon API Key', validation: { type: 'supabase' } },
+          'NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY': { values: { 'local': 'pk_test_clerk', 'dev': 'pk_dev_clerk', 'production': 'pk_prod_clerk' }, note: 'Clerk Client Publishable Key', validation: { type: 'clerk' } },
+          'CLERK_SECRET_KEY': { values: { 'local': 'sk_test_clerk', 'dev': 'sk_dev_clerk', 'production': 'sk_prod_clerk' }, note: 'Clerk Secret Backend Key', validation: { type: 'clerk' } },
+          'DATABASE_URL': { values: { 'local': 'postgresql://localhost:5432/db', 'dev': 'postgresql://pg.dev:5432/db', 'production': 'postgresql://postgres.neon.tech/db' }, note: 'Main Postgres DB url', validation: { type: 'tcp' } },
+          'MAPBOX_ACCESS_TOKEN': { values: { 'local': 'pk.mapbox.local', 'production': 'pk.mapbox.prod' }, note: 'Mapbox maps credential', validation: { type: 'mapbox' } },
+          'RESEND_API_KEY': { values: { 'local': 're_123_local', 'production': 're_123_prod' }, note: 'Resend transactional mail key', validation: { type: 'resend' } },
+          'GENERIC_API_TOKEN': { values: { 'local': 'token_local_123', 'dev': 'token_dev_123', 'production': 'token_prod_123' }, note: 'Generic server bearer token', validation: { type: 'http' } },
+          'PORT': { values: { 'local': '3000', 'dev': '4000', 'production': '8000' }, note: 'Server active listening port', validation: { type: 'none' } }
+        },
+        profiles: {}
+      },
+      availableFiles: ['.env', '.env.local', '.env.development'],
+      activeTargetFile: '.env.local',
+      externalDesync: false,
+      parsedEnvLocal: null
+    }),
+    saveProjectData: async (dir, config, target) => ({ success: true }),
+    logEvent: (level, msg) => console.log(`[Mock ${level}] ${msg}`),
+    testConnection: async (val, type) => {
+      return new Promise(resolve => setTimeout(() => {
+        resolve({ status: val.includes('fail') || val.includes('error') ? 'error' : 'success' });
+      }, 800));
+    },
+    getSystemInfo: async () => ({ appVersion: '1.0.0-alpha (Mock)' })
+  };
+}
+
 let state = {
   activeProjectPath: null,
   recentProjects: [],
@@ -6,7 +47,9 @@ let state = {
   keys: {},
   availableFiles: [],
   selectedTargetFile: '.env.local',
-  systemLogs: []
+  systemLogs: [],
+  maskSecrets: true,
+  unmaskedKeys: {} // Set of keys currently revealed by the user
 };
 
 // DOM Elements
@@ -16,29 +59,47 @@ const btnSaveEnv = document.getElementById('btn-save-env');
 const projectPathDisplay = document.getElementById('project-path-display');
 const targetEnvSelect = document.getElementById('target-env-file');
 const variablesContainer = document.getElementById('variables-container');
-const globalToggles = document.getElementById('global-env-toggles');
 const consoleOutput = document.getElementById('console-output');
 const searchInput = document.getElementById('search-input');
 const navItems = document.querySelectorAll('.nav-item[data-view]');
 const viewSections = document.querySelectorAll('.view-section');
 
+// Drawer Elements
+const drawerOverlay = document.getElementById('drawer-overlay');
+const slidingDrawer = document.getElementById('sliding-drawer');
+const drawerTitle = document.getElementById('drawer-title');
+const drawerContent = document.getElementById('drawer-content');
+const btnCloseDrawer = document.getElementById('btn-close-drawer');
+const btnDrawerApply = document.getElementById('btn-drawer-apply');
+
+// Modal Elements
 const syncModal = document.getElementById('sync-modal-container');
 const btnSyncImport = document.getElementById('btn-sync-import');
 const btnSyncOverwrite = document.getElementById('btn-sync-overwrite');
+
+const envModal = document.getElementById('env-modal-container');
+const btnManageEnvs = document.getElementById('btn-manage-envs');
+const btnCloseEnvModal = document.getElementById('btn-close-env-modal');
+const btnAddEnv = document.getElementById('btn-add-env');
+const newEnvInput = document.getElementById('new-env-input');
+const envListItems = document.getElementById('env-list-items');
+
+// Environment segmented control
+const sliderLabels = document.getElementById('slider-labels');
+
+let activeDrawerGroup = null; // Track which group is open in drawer
 
 // Logger
 function logEvent(msg, level = 'INFO') {
   const time = new Date().toLocaleTimeString();
   state.systemLogs.push({ time, level, msg });
   
-  // Update UI Console
   const div = document.createElement('div');
   div.className = `log-line ${level.toLowerCase()}`;
   div.innerHTML = `<span class="log-time">[${time}]</span> <span class="log-level">[${level}]</span> ${msg}`;
   consoleOutput.appendChild(div);
   consoleOutput.scrollTop = consoleOutput.scrollHeight;
 
-  // Send to persistent backend
   window.api.logEvent(level, msg);
 }
 
@@ -67,25 +128,274 @@ function showToast(msg) {
   setTimeout(() => toast.classList.remove('show'), 3000);
 }
 
-// Global Environment Switcher Setup
-function renderGlobalToggles() {
-  globalToggles.innerHTML = '';
-  state.environments.forEach(env => {
-    const btn = document.createElement('button');
-    btn.className = `toggle-btn ${state.activeEnvironment === env ? 'active' : ''}`;
-    btn.innerText = env.charAt(0).toUpperCase() + env.slice(1);
-    btn.onclick = () => {
-      state.activeEnvironment = env;
-      renderGlobalToggles();
-      renderVariables(); // Re-render to show values for active env
-    };
-    globalToggles.appendChild(btn);
+// Background Connections Health Cache
+let connectionStatusCache = {}; // maps keyName -> 'success' | 'failed' | 'testing' | 'untested'
+
+function updateWorkspaceMeta() {
+  const keyCount = Object.keys(state.keys || {}).length;
+  const envCount = state.environments.length;
+  const verifiedCount = Object.values(connectionStatusCache).filter(status => status === 'success').length;
+  const testableCount = Object.values(state.keys || {}).filter(keyData => (keyData.validation?.type || 'none') !== 'none').length;
+
+  const keyStat = document.getElementById('key-count-stat');
+  const envStat = document.getElementById('env-count-stat');
+  const activeStat = document.getElementById('active-env-stat');
+  const verifiedStat = document.getElementById('verified-count-stat');
+
+  if (keyStat) keyStat.innerText = keyCount.toString();
+  if (envStat) envStat.innerText = envCount.toString();
+  if (activeStat) activeStat.innerText = state.activeEnvironment || 'none';
+  if (verifiedStat) verifiedStat.innerText = `${verifiedCount}/${testableCount}`;
+}
+
+function getKeyActiveEnv(keyName) {
+  const keyData = state.keys[keyName];
+  if (!keyData) return state.activeEnvironment;
+  return keyData.active || state.activeEnvironment || state.environments[0];
+}
+
+function setKeyActiveEnv(keyName, env) {
+  if (!state.keys[keyName] || !state.environments.includes(env)) return;
+  state.keys[keyName].active = env;
+}
+
+function applyEnvironmentPreset(env) {
+  state.activeEnvironment = env;
+  Object.keys(state.keys).forEach(keyName => {
+    state.keys[keyName].active = env;
   });
 }
 
-// Variables Render
-function renderVariables(filter = '') {
+async function triggerBackgroundPings() {
+  if (!state.activeProjectPath) return;
+  
+  logEvent('Triggering automatic background connection checks...', 'INFO');
+  
+  for (const [keyName, keyData] of Object.entries(state.keys)) {
+    const type = keyData.validation?.type || 'none';
+    if (type === 'none') {
+      connectionStatusCache[keyName] = 'untested';
+      continue;
+    }
+    
+    const env = getKeyActiveEnv(keyName);
+    const val = keyData.values[env] || '';
+    if (!val) {
+      connectionStatusCache[keyName] = 'untested';
+      continue;
+    }
+
+    connectionStatusCache[keyName] = 'testing';
+    updateHealthBadges();
+
+    // Call async test
+    window.api.testConnection(val, type).then(res => {
+      connectionStatusCache[keyName] = res.status === 'success' ? 'success' : 'failed';
+      updateHealthBadges();
+      
+      if (res.status === 'success') {
+        logEvent(`Connection Successful for variable ${keyName} (${type})`, 'INFO');
+      } else {
+        logEvent(`Connection Verification Failed for ${keyName} (${type}): ${res.error || 'unreachable'}`, 'WARN');
+      }
+    });
+  }
+}
+
+function updateHealthBadges() {
+  updateWorkspaceMeta();
+
+  // Update badges for each Service Group Card dynamically
+  const groups = getGroupedKeys();
+  for (const [groupName, keysList] of Object.entries(groups)) {
+    const groupDomId = getGroupDomId(groupName);
+    const badge = document.getElementById(`badge-group-${groupDomId}`);
+    const dot = document.getElementById(`dot-group-${groupDomId}`);
+    const textSpan = document.getElementById(`badge-text-group-${groupDomId}`);
+    if (!badge) continue;
+
+    // Aggregate health for keys in this group
+    let hasFailed = false;
+    let hasTesting = false;
+    let hasSuccess = false;
+
+    keysList.forEach(k => {
+      const status = connectionStatusCache[k] || 'untested';
+      if (status === 'failed') hasFailed = true;
+      if (status === 'testing') hasTesting = true;
+      if (status === 'success') hasSuccess = true;
+    });
+
+    badge.className = 'health-badge';
+    if (hasFailed) {
+      badge.classList.add('failed');
+      textSpan.innerText = 'Failed';
+    } else if (hasTesting) {
+      badge.classList.add('testing');
+      textSpan.innerText = 'Testing';
+    } else if (hasSuccess) {
+      badge.classList.add('success');
+      textSpan.innerText = 'Connected';
+    } else {
+      badge.classList.add('untested');
+      textSpan.innerText = 'Untested';
+    }
+  }
+}
+
+// Group keys helper
+function getGroupedKeys() {
+  const groups = {
+    Supabase: [],
+    Clerk: [],
+    Contentful: [],
+    Mapbox: [],
+    Resend: [],
+    Database: [],
+    General: []
+  };
+
+  Object.keys(state.keys).forEach(key => {
+    const manualGroup = normalizeGroupName(state.keys[key].group);
+    if (manualGroup) {
+      if (!groups[manualGroup]) groups[manualGroup] = [];
+      groups[manualGroup].push(key);
+      return;
+    }
+
+    const kUpper = key.toUpperCase();
+    if (kUpper.includes('SUPABASE')) {
+      groups.Supabase.push(key);
+    } else if (kUpper.includes('CLERK')) {
+      groups.Clerk.push(key);
+    } else if (isContentfulKey(kUpper)) {
+      groups.Contentful.push(key);
+    } else if (kUpper.includes('MAPBOX')) {
+      groups.Mapbox.push(key);
+    } else if (kUpper.includes('RESEND')) {
+      groups.Resend.push(key);
+    } else if (kUpper.includes('DATABASE') || kUpper.includes('DB_') || kUpper.includes('POSTGRES') || kUpper.includes('REDIS') || kUpper.includes('MONGO') || kUpper.includes('MYSQL')) {
+      groups.Database.push(key);
+    } else {
+      groups.General.push(key);
+    }
+  });
+
+  // Filter out empty groups
+  for (const group in groups) {
+    if (groups[group].length === 0) {
+      delete groups[group];
+    }
+  }
+  return groups;
+}
+
+function normalizeGroupName(value) {
+  const trimmed = (value || '').trim();
+  if (!trimmed || trimmed.toLowerCase() === 'auto') return '';
+  return trimmed
+    .split(/\s+/)
+    .map(part => part.charAt(0).toUpperCase() + part.slice(1).toLowerCase())
+    .join(' ');
+}
+
+function getGroupNameForKey(key) {
+  const manualGroup = normalizeGroupName(state.keys[key]?.group);
+  if (manualGroup) return manualGroup;
+
+  const kUpper = key.toUpperCase();
+  if (kUpper.includes('SUPABASE')) return 'Supabase';
+  if (kUpper.includes('CLERK')) return 'Clerk';
+  if (isContentfulKey(kUpper)) return 'Contentful';
+  if (kUpper.includes('MAPBOX')) return 'Mapbox';
+  if (kUpper.includes('RESEND')) return 'Resend';
+  if (kUpper.includes('DATABASE') || kUpper.includes('DB_') || kUpper.includes('POSTGRES') || kUpper.includes('REDIS') || kUpper.includes('MONGO') || kUpper.includes('MYSQL')) return 'Database';
+  return 'General';
+}
+
+function isContentfulKey(kUpper) {
+  return kUpper.includes('CONTENTFUL') ||
+         kUpper.includes('CONTENT_DELIVERY') ||
+         kUpper.includes('CONTENT_PREVIEW') ||
+         kUpper === 'SPACE_ID' ||
+         kUpper.endsWith('_SPACE_ID') ||
+         kUpper.includes('CONTENT_ENVIRONMENT');
+}
+
+function getGroupDomId(groupName) {
+  return groupName.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'group';
+}
+
+function toDomId(value) {
+  return String(value).replace(/[^a-zA-Z0-9_-]+/g, '-').replace(/^-|-$/g, '') || 'item';
+}
+
+// Clean Key Prefix for visualization display
+function cleanKeyLabel(key, groupName) {
+  let label = key;
+  // Strip framework prefixes
+  label = label.replace(/^(VITE_PUBLIC_|VITE_|NEXT_PUBLIC_|REACT_APP_|APP_|NEXT_)/i, '');
+  // Strip service group name if redundant
+  const gUpper = groupName.toUpperCase();
+  if (label.startsWith(gUpper + '_')) {
+    label = label.replace(new RegExp(`^${gUpper}_`, 'i'), '');
+  }
+  return label;
+}
+
+// Environment Slider Setup & Render
+function renderEnvironmentSlider() {
+  sliderLabels.innerHTML = '';
+  const total = state.environments.length;
+  
+  if (total === 0) return;
+
+  const applyPreset = (env) => {
+    if (!state.environments.includes(env)) return;
+    applyEnvironmentPreset(env);
+    logEvent(`Applied environment preset to all variables: ${env}`, 'INFO');
+    renderEnvironmentSlider();
+    renderServiceGroups();
+    triggerBackgroundPings();
+  };
+
+  if (total > 5) {
+    const wrapper = document.createElement('div');
+    wrapper.className = 'preset-select-wrap';
+    wrapper.innerHTML = `
+      <label class="preset-select-label" for="global-env-preset">Preset</label>
+      <select class="preset-select dropdown-select" id="global-env-preset">
+        ${state.environments.map(env => `
+          <option value="${env}" ${state.activeEnvironment === env ? 'selected' : ''}>${env.charAt(0).toUpperCase() + env.slice(1)}</option>
+        `).join('')}
+      </select>
+    `;
+
+    wrapper.querySelector('.preset-select').onchange = (event) => {
+      applyPreset(event.target.value);
+    };
+    sliderLabels.appendChild(wrapper);
+  } else {
+    state.environments.forEach(env => {
+      const label = document.createElement('button');
+      label.type = 'button';
+      label.className = `slider-label ${state.activeEnvironment === env ? 'active' : ''}`;
+      label.setAttribute('aria-pressed', state.activeEnvironment === env ? 'true' : 'false');
+      label.innerText = env.charAt(0).toUpperCase() + env.slice(1);
+      label.onclick = () => {
+        applyPreset(env);
+      };
+      sliderLabels.appendChild(label);
+    });
+  }
+
+  updateWorkspaceMeta();
+}
+
+// Render one-key-per-row list with lightweight service groupings
+function renderServiceGroups(filter = '') {
   variablesContainer.innerHTML = '';
+  updateWorkspaceMeta();
   
   if (!state.activeProjectPath) {
     variablesContainer.innerHTML = `
@@ -97,82 +407,357 @@ function renderVariables(filter = '') {
     return;
   }
 
-  const keys = Object.keys(state.keys).filter(k => k.toLowerCase().includes(filter.toLowerCase()));
+  const groups = getGroupedKeys();
+  const filteredGroups = {};
   
-  if (keys.length === 0) {
+  // Apply search query filtering
+  Object.entries(groups).forEach(([groupName, keys]) => {
+    const matchedKeys = keys.filter(k => {
+      const label = cleanKeyLabel(k, groupName);
+      return k.toLowerCase().includes(filter.toLowerCase()) || 
+             label.toLowerCase().includes(filter.toLowerCase()) ||
+             groupName.toLowerCase().includes(filter.toLowerCase());
+    });
+    if (matchedKeys.length > 0) {
+      filteredGroups[groupName] = matchedKeys;
+    }
+  });
+
+  if (Object.keys(filteredGroups).length === 0) {
     variablesContainer.innerHTML = `
       <div class="empty-state">
-        <h3>No variables found</h3>
-        <p>Refine your search or add a new key.</p>
+        <h3>No services or keys matched</h3>
+        <p>Refine your search query.</p>
       </div>`;
     return;
   }
 
-  keys.forEach(keyName => {
-    const keyData = state.keys[keyName];
-    const val = keyData.values[state.activeEnvironment] || '';
+  const groupedList = document.createElement('div');
+  groupedList.className = 'grouped-key-list';
+
+  Object.entries(filteredGroups).forEach(([groupName, keysList]) => {
+    const groupDomId = getGroupDomId(groupName);
+    const groupSection = document.createElement('section');
+    groupSection.className = `key-group-section ${groupDomId}`;
     
-    const card = document.createElement('div');
-    card.className = 'var-card';
-    card.innerHTML = `
-      <div class="var-header">
-        <span class="var-name">${keyName}</span>
-        <div class="var-badge ${keyData.validation.type !== 'none' ? 'tested' : ''}">
-          ${keyData.validation.type !== 'none' ? keyData.validation.type.toUpperCase() : 'Untested'}
+    groupSection.innerHTML = `
+      <div class="key-group-header">
+        <div class="service-title-row">
+          <div class="service-icon-bg">${groupName.charAt(0)}</div>
+          <div>
+            <span class="service-name">${groupName}</span>
+            <span class="group-count">${keysList.length} ${keysList.length === 1 ? 'key' : 'keys'}</span>
+          </div>
+        </div>
+        <div class="health-badge untested" id="badge-group-${groupDomId}">
+          <span class="badge-dot" id="dot-group-${groupDomId}"></span>
+          <span id="badge-text-group-${groupDomId}">Untested</span>
         </div>
       </div>
-      <div class="var-value-row">
-        <input type="text" class="var-input" value="${val}" readonly>
-        <button class="btn btn-secondary btn-test" data-key="${keyName}">Test Connection</button>
-      </div>
-      ${keyData.note ? `<div class="var-note">📝 ${keyData.note}</div>` : ''}
+      <div class="stripped-keys-list" id="keys-list-${groupDomId}"></div>
     `;
-    variablesContainer.appendChild(card);
+
+    const keysListContainer = groupSection.querySelector(`#keys-list-${groupDomId}`);
+    keysList.forEach(key => {
+      const cleanLabel = cleanKeyLabel(key, groupName);
+      const row = document.createElement('div');
+      row.className = 'stripped-key-row';
+      
+      const env = getKeyActiveEnv(key);
+      const rawVal = state.keys[key].values[env] || '';
+      const displayVal = state.unmaskedKeys[key] ? rawVal : '••••••••';
+      const useEnvDropdown = state.environments.length > 5;
+      const envOptions = useEnvDropdown
+        ? `
+          <label class="key-env-select-label" for="env-select-${toDomId(key)}">Environment</label>
+          <select class="key-env-select dropdown-select" id="env-select-${toDomId(key)}" data-key="${key}">
+            ${state.environments.map(envName => `
+              <option value="${envName}" ${envName === env ? 'selected' : ''}>${envName.charAt(0).toUpperCase() + envName.slice(1)}</option>
+            `).join('')}
+          </select>
+        `
+        : state.environments.map(envName => `
+          <button type="button" class="key-env-option ${envName === env ? 'active' : ''}" data-key="${key}" data-env="${envName}" aria-pressed="${envName === env ? 'true' : 'false'}">
+            ${envName.charAt(0).toUpperCase() + envName.slice(1)}
+          </button>
+        `).join('');
+
+      row.innerHTML = `
+        <div class="key-main">
+          <span class="stripped-key-name">${cleanLabel}</span>
+          <div class="stripped-key-val-wrapper">
+            <span>${displayVal || '<empty>'}</span>
+            <button class="eye-btn" data-key="${key}" title="Toggle secret visibility">
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                ${state.unmaskedKeys[key] ? 
+                  `<path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"/><line x1="1" y1="1" x2="23" y2="23"/>` :
+                  `<path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/>`
+                }
+              </svg>
+            </button>
+          </div>
+        </div>
+        <div class="key-env-switcher" aria-label="Environment for ${key}">
+          ${envOptions}
+        </div>
+      `;
+
+      row.onclick = (event) => {
+        if (event.target.closest('.key-env-switcher, .eye-btn')) {
+          return;
+        }
+        openDrawer(groupName, [key]);
+      };
+
+      row.querySelectorAll('.key-env-option').forEach(btn => {
+        btn.onclick = (e) => {
+          e.stopPropagation();
+          setKeyActiveEnv(key, btn.getAttribute('data-env'));
+          renderEnvironmentSlider();
+          renderServiceGroups(filter);
+          triggerBackgroundPings();
+        };
+      });
+
+      const keyEnvSelect = row.querySelector('.key-env-select');
+      if (keyEnvSelect) {
+        keyEnvSelect.onchange = (e) => {
+          e.stopPropagation();
+          setKeyActiveEnv(key, e.target.value);
+          renderEnvironmentSlider();
+          renderServiceGroups(filter);
+          triggerBackgroundPings();
+        };
+        keyEnvSelect.onclick = (e) => e.stopPropagation();
+      }
+
+      // Attach Toggle Mask Eye click
+      row.querySelector('.eye-btn').onclick = (e) => {
+        e.stopPropagation(); // Avoid opening drawer
+        state.unmaskedKeys[key] = !state.unmaskedKeys[key];
+        renderServiceGroups(filter);
+      };
+
+      keysListContainer.appendChild(row);
+    });
+
+    groupedList.appendChild(groupSection);
   });
 
-  // Attach Test Handlers
-  document.querySelectorAll('.btn-test').forEach(btn => {
-    btn.addEventListener('click', async (e) => {
-      const key = e.target.getAttribute('data-key');
-      const val = state.keys[key].values[state.activeEnvironment];
-      const type = state.keys[key].validation.type;
+  variablesContainer.appendChild(groupedList);
+  updateHealthBadges();
+}
+
+searchInput.addEventListener('input', (e) => renderServiceGroups(e.target.value));
+
+// --- sliding Drawer Controls ---
+function openDrawer(groupName, keysList) {
+  activeDrawerGroup = groupName;
+  drawerTitle.innerText = `${groupName} Integration Settings`;
+  drawerContent.innerHTML = '';
+
+  keysList.forEach(key => {
+    const keyData = state.keys[key];
+    const card = document.createElement('div');
+    card.className = 'drawer-var-card';
+    
+    // Header key
+    card.innerHTML = `
+      <span class="drawer-var-name">${key}</span>
+      <div id="envs-inputs-container-${key.replace(/\$/g, '_')}"></div>
       
-      if (!val) {
-        showToast('Value is empty.');
+      <div class="drawer-var-settings">
+        <div>
+          <label style="font-size:11px; font-weight:600; text-transform:uppercase; color:var(--text-muted); display:block; margin-bottom:4px;">Service Group</label>
+          <input type="text" class="dropdown-select drawer-group-input" data-key="${key}" value="${keyData.group || ''}" style="width:100%; box-sizing:border-box;" placeholder="${getGroupNameForKey(key)}">
+        </div>
+        <div>
+          <label style="font-size:11px; font-weight:600; text-transform:uppercase; color:var(--text-muted); display:block; margin-bottom:4px;">Validation Mode</label>
+          <select class="dropdown-select drawer-type-select" data-key="${key}" style="width:100%;">
+            <option value="none">None (Untested)</option>
+            <option value="tcp">TCP Network Port</option>
+            <option value="clerk">Clerk Gateway Check</option>
+            <option value="supabase">Supabase Authorized REST</option>
+            <option value="mapbox">Mapbox Auth Check</option>
+            <option value="resend">Resend Bearer Assert</option>
+            <option value="http">Generic HTTP REST GET</option>
+          </select>
+        </div>
+        <div>
+          <label style="font-size:11px; font-weight:600; text-transform:uppercase; color:var(--text-muted); display:block; margin-bottom:4px;">Comment Note</label>
+          <input type="text" class="dropdown-select drawer-note-input" data-key="${key}" value="${keyData.note || ''}" style="width:100%; box-sizing:border-box;" placeholder="Add helpful inline note...">
+        </div>
+      </div>
+    `;
+
+    const inputsContainer = card.querySelector(`#envs-inputs-container-${key.replace(/\$/g, '_')}`);
+    
+    // Create input fields for each environment
+    state.environments.forEach(env => {
+      const row = document.createElement('div');
+      row.className = 'drawer-var-row';
+      row.innerHTML = `
+        <label>${env} value</label>
+        <input type="text" class="env-val-input" data-key="${key}" data-env="${env}" value="${keyData.values[env] || ''}" placeholder="Empty value">
+      `;
+      inputsContainer.appendChild(row);
+    });
+
+    // Populate active selector
+    const sel = card.querySelector('.drawer-type-select');
+    sel.value = keyData.validation?.type || 'none';
+
+    drawerContent.appendChild(card);
+  });
+
+  drawerOverlay.style.display = 'block';
+  setTimeout(() => {
+    drawerOverlay.style.opacity = '1';
+    slidingDrawer.classList.add('show');
+  }, 10);
+}
+
+function closeDrawer() {
+  slidingDrawer.classList.remove('show');
+  drawerOverlay.style.opacity = '0';
+  setTimeout(() => {
+    drawerOverlay.style.display = 'none';
+  }, 300);
+}
+
+btnCloseDrawer.addEventListener('click', closeDrawer);
+drawerOverlay.addEventListener('click', closeDrawer);
+
+// Apply Drawer changes
+btnDrawerApply.addEventListener('click', () => {
+  if (!activeDrawerGroup) return;
+
+  // Read drawer inputs
+  const valInputs = drawerContent.querySelectorAll('.env-val-input');
+  const groupInputs = drawerContent.querySelectorAll('.drawer-group-input');
+  const typeSelects = drawerContent.querySelectorAll('.drawer-type-select');
+  const noteInputs = drawerContent.querySelectorAll('.drawer-note-input');
+
+  valInputs.forEach(input => {
+    const key = input.getAttribute('data-key');
+    const env = input.getAttribute('data-env');
+    state.keys[key].values[env] = input.value;
+  });
+
+  groupInputs.forEach(input => {
+    const key = input.getAttribute('data-key');
+    const group = normalizeGroupName(input.value);
+    if (group) {
+      state.keys[key].group = group;
+    } else {
+      delete state.keys[key].group;
+    }
+  });
+
+  typeSelects.forEach(select => {
+    const key = select.getAttribute('data-key');
+    state.keys[key].validation = { type: select.value };
+  });
+
+  noteInputs.forEach(input => {
+    const key = input.getAttribute('data-key');
+    state.keys[key].note = input.value;
+  });
+
+  logEvent(`Updated local configurations for variables in ${activeDrawerGroup}`, 'INFO');
+  closeDrawer();
+  renderServiceGroups();
+  triggerBackgroundPings();
+  showToast('Overrides Applied Locally');
+});
+
+
+// --- Manage Environments Controls ---
+btnManageEnvs.addEventListener('click', () => {
+  envModal.classList.add('show');
+  renderEnvManageList();
+});
+
+btnCloseEnvModal.addEventListener('click', () => envModal.classList.remove('show'));
+
+function renderEnvManageList() {
+  envListItems.innerHTML = '';
+  state.environments.forEach(env => {
+    const li = document.createElement('li');
+    li.innerHTML = `
+      <span class="env-name-span">${env}</span>
+      <button class="env-delete-btn" data-env="${env}">Delete</button>
+    `;
+    
+    li.querySelector('.env-delete-btn').onclick = () => {
+      if (state.environments.length <= 1) {
+        showToast('You must keep at least one environment!');
         return;
       }
       
-      const prevText = e.target.innerText;
-      e.target.innerText = 'Pinging...';
-      e.target.disabled = true;
-
-      logEvent(`Testing ${key} connection...`);
-      const res = await window.api.testConnection(val, type === 'none' ? 'tcp' : type);
+      // Remove env
+      state.environments = state.environments.filter(e => e !== env);
       
-      e.target.innerText = prevText;
-      e.target.disabled = false;
+      // Clean values
+      Object.keys(state.keys).forEach(key => {
+        delete state.keys[key].values[env];
+      });
       
-      if (res.status === 'success') {
-        showToast('Connection Successful!');
-        e.target.style.background = '#dcfce7';
-        e.target.style.color = '#166534';
-      } else {
-        showToast('Connection Failed');
-        e.target.style.background = '#fee2e2';
-        e.target.style.color = '#991b1b';
+      if (state.activeEnvironment === env) {
+        state.activeEnvironment = state.environments[0];
       }
-    });
+
+      logEvent(`Environment stage deleted: ${env}`, 'INFO');
+      renderEnvManageList();
+      renderEnvironmentSlider();
+      renderServiceGroups();
+      triggerBackgroundPings();
+      showToast(`${env} Removed`);
+    };
+
+    envListItems.appendChild(li);
   });
 }
 
-searchInput.addEventListener('input', (e) => renderVariables(e.target.value));
+// Add New Environment stage
+btnAddEnv.addEventListener('click', () => {
+  const val = newEnvInput.value.trim().toLowerCase();
+  if (!val) return;
+  if (state.environments.includes(val)) {
+    showToast('Environment already exists');
+    return;
+  }
 
-// Open Project Handler
-async function handleOpenProject() {
-  const dir = await window.api.selectProjectDir();
-  if (dir) {
+  state.environments.push(val);
+  newEnvInput.value = '';
+
+  // Seed empty placeholder values
+  Object.keys(state.keys).forEach(key => {
+    state.keys[key].values[val] = '';
+  });
+
+  logEvent(`New environment stage added: ${val}`, 'INFO');
+  renderEnvManageList();
+  renderEnvironmentSlider();
+  renderServiceGroups();
+  showToast(`${val} Environment Added`);
+});
+
+// Load Project Handler
+async function loadProject(dir) {
+  if (!dir) return;
+  
+  try {
     state.activeProjectPath = dir;
     projectPathDisplay.innerText = dir;
+    
+    // Update top path indicator
+    const topIndicator = document.getElementById('top-path-indicator');
+    if (topIndicator) {
+      topIndicator.innerText = dir;
+    }
+    
+    document.getElementById('project-name-header').innerText = dir.split(/[\\/]/).pop();
     logEvent(`Loading workspace: ${dir}`);
     
     const data = await window.api.loadProjectData(dir);
@@ -181,6 +766,12 @@ async function handleOpenProject() {
     state.activeEnvironment = data.config.activeEnvironment || 'local';
     state.availableFiles = data.availableFiles;
     state.selectedTargetFile = data.activeTargetFile;
+
+    Object.keys(state.keys).forEach(key => {
+      if (!state.keys[key].active || !state.environments.includes(state.keys[key].active)) {
+        state.keys[key].active = state.activeEnvironment;
+      }
+    });
 
     // Populate target select
     targetEnvSelect.innerHTML = '';
@@ -192,9 +783,13 @@ async function handleOpenProject() {
       targetEnvSelect.appendChild(opt);
     });
 
-    renderGlobalToggles();
-    renderVariables();
+    renderEnvironmentSlider();
+    renderServiceGroups();
+    triggerBackgroundPings();
     showToast('Project Loaded');
+
+    // Sync recent projects sidebar
+    await refreshRecentProjects();
 
     // Desync Check
     if (data.externalDesync && data.parsedEnvLocal) {
@@ -210,85 +805,84 @@ async function handleOpenProject() {
           state.keys[k].values[state.activeEnvironment] = v.value;
         }
         syncModal.classList.remove('show');
-        renderVariables();
+        renderServiceGroups();
+        triggerBackgroundPings();
         logEvent('External changes synced into Envie database.', 'INFO');
         showToast('Synced successfully');
       };
 
       btnSyncOverwrite.onclick = () => {
-        // Do nothing to state, just hide modal. Next Save will overwrite file.
         syncModal.classList.remove('show');
         logEvent('Opted to overwrite external changes on next save.', 'INFO');
       };
     }
+  } catch (err) {
+    logEvent(`Failed to load workspace data: ${err.message}`, 'ERROR');
+    showToast('Load Failed');
+  }
+}
+
+async function handleOpenProject() {
+  const dir = await window.api.selectProjectDir();
+  if (dir) {
+    await loadProject(dir);
   }
 }
 
 btnOpenProject.addEventListener('click', handleOpenProject);
 btnCenterOpen.addEventListener('click', handleOpenProject);
 
-// Manual Sync Handler
-const btnSyncProject = document.getElementById('btn-sync-project');
-btnSyncProject.addEventListener('click', async () => {
-  if (!state.activeProjectPath) {
-    showToast('No active project open to sync');
+// Sync Recent Projects Sidebar List
+async function refreshRecentProjects() {
+  try {
+    const { recentProjects } = await window.api.getRecentProjects();
+    state.recentProjects = recentProjects || [];
+    renderRecentProjectsList();
+  } catch (err) {
+    console.error('Failed to retrieve recent projects:', err);
+  }
+}
+
+function renderRecentProjectsList() {
+  const list = document.getElementById('recent-projects-list');
+  if (!list) return;
+  list.innerHTML = '';
+  
+  if (state.recentProjects.length === 0) {
+    list.innerHTML = '<li class="empty-recent">No projects loaded</li>';
     return;
   }
+  
+  state.recentProjects.forEach(p => {
+    const li = document.createElement('li');
+    li.className = 'recent-project-item';
+    const folderName = p.split(/[\\/]/).pop();
+    li.innerHTML = `
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
+      <span class="proj-name" title="${p}">${folderName}</span>
+    `;
+    li.onclick = () => {
+      logEvent(`Switching workspace to recent project: ${p}`);
+      loadProject(p);
+    };
+    list.appendChild(li);
+  });
+}
+
+// Manual Sync Button Handler
+document.getElementById('btn-sync-project').addEventListener('click', async () => {
+  if (!state.activeProjectPath) return;
 
   logEvent(`Manual workspace synchronization triggered for: ${state.activeProjectPath}`, 'INFO');
+  const btnSyncProject = document.getElementById('btn-sync-project');
   const oldText = btnSyncProject.innerHTML;
   btnSyncProject.innerHTML = 'Syncing...';
   btnSyncProject.disabled = true;
 
   try {
-    const data = await window.api.loadProjectData(state.activeProjectPath);
-    
-    // Update state
-    state.keys = data.config.keys;
-    state.environments = data.config.environments;
-    state.activeEnvironment = data.config.activeEnvironment || 'local';
-    state.availableFiles = data.availableFiles;
-    state.selectedTargetFile = data.activeTargetFile;
-
-    // Re-populate target select
-    targetEnvSelect.innerHTML = '';
-    state.availableFiles.forEach(f => {
-      const opt = document.createElement('option');
-      opt.value = f;
-      opt.innerText = f;
-      if (f === state.selectedTargetFile) opt.selected = true;
-      targetEnvSelect.appendChild(opt);
-    });
-
-    renderGlobalToggles();
-    renderVariables();
-
-    if (data.externalDesync && data.parsedEnvLocal) {
-      logEvent(`Desync detected during manual verification check.`, 'WARN');
-      syncModal.classList.add('show');
-      
-      btnSyncImport.onclick = () => {
-        for (const [k, v] of Object.entries(data.parsedEnvLocal)) {
-          if (!state.keys[k]) {
-            state.keys[k] = { values: {}, note: v.note, active: 'local', validation: { type: 'none' } };
-          }
-          state.keys[k].values[state.activeEnvironment] = v.value;
-        }
-        syncModal.classList.remove('show');
-        renderVariables();
-        logEvent('External changes synced into Envie database.', 'INFO');
-        showToast('Synced successfully');
-      };
-
-      btnSyncOverwrite.onclick = () => {
-        syncModal.classList.remove('show');
-        logEvent('Opted to overwrite external changes on next save.', 'INFO');
-        showToast('Overwriting aligned');
-      };
-    } else {
-      logEvent('Workspace is fully in sync with disk.', 'INFO');
-      showToast('Workspace Synchronized!');
-    }
+    await loadProject(state.activeProjectPath);
+    logEvent('Workspace is fully in sync with disk.', 'INFO');
+    showToast('Workspace Synchronized!');
   } catch (err) {
     logEvent(`Workspace sync failed: ${err.message}`, 'ERROR');
     showToast('Sync Failed');
@@ -303,6 +897,11 @@ btnSaveEnv.addEventListener('click', async () => {
   if (!state.activeProjectPath) return;
 
   const targetFile = targetEnvSelect.value;
+  if (!targetFile || targetFile === '.envie') {
+    showToast('Invalid target output file');
+    logEvent('Error: Target output file cannot be empty or .envie', 'ERROR');
+    return;
+  }
   const configToSave = {
     environments: state.environments,
     activeEnvironment: state.activeEnvironment,
@@ -319,6 +918,8 @@ btnSaveEnv.addEventListener('click', async () => {
   if (res.success) {
     showToast(`Saved & Exported to ${targetFile}`);
     logEvent(`Saved config and output to ${targetFile}`, 'INFO');
+    // Also trigger recent project list reload to ensure workspace is in order
+    await refreshRecentProjects();
   } else {
     showToast('Error saving file');
     logEvent(`Failed to save: ${res.error}`, 'ERROR');
@@ -330,10 +931,28 @@ targetEnvSelect.addEventListener('change', (e) => {
   logEvent(`Target output file changed to ${e.target.value}`);
 });
 
-// Init
+// Init Version Watermark & Boot App
 window.api.getSystemInfo().then(info => {
-  document.getElementById('version-electron').innerText = info.electron;
-  document.getElementById('version-node').innerText = info.node;
-  document.getElementById('version-chrome').innerText = info.chrome;
-  document.getElementById('system-platform').innerText = `${info.platform} (${info.arch})`;
+  const versionEl = document.querySelector('.app-version');
+  if (versionEl) {
+    versionEl.innerText = `v${info.appVersion || '1.0.0-alpha'}`;
+  }
 });
+
+// Load recent projects and last active project on startup!
+async function initApp() {
+  try {
+    const { recentProjects, lastActiveProject } = await window.api.getRecentProjects();
+    state.recentProjects = recentProjects || [];
+    renderRecentProjectsList();
+    
+    if (lastActiveProject) {
+      logEvent(`Auto-loading last active workspace: ${lastActiveProject}`, 'INFO');
+      await loadProject(lastActiveProject);
+    }
+  } catch (err) {
+    console.error('App init failed:', err);
+  }
+}
+
+initApp();

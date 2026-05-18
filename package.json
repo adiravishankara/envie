@@ -4,14 +4,42 @@
   "description": "A simple utility to manage environment variables in a visual format.",
   "main": "main.js",
   "devDependencies": {
-    "electron": "^42.1.0"
+    "electron": "^42.1.0",
+    "electron-builder": "^26.8.1"
   },
   "scripts": {
     "start": "electron .",
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "dist": "electron-builder"
   },
   "keywords": [],
   "author": "",
   "license": "ISC",
-  "type": "commonjs"
+  "type": "commonjs",
+  "build": {
+    "appId": "com.envie.app",
+    "productName": "Envie",
+    "publish": [
+      {
+        "provider": "github",
+        "owner": "adiravishankara",
+        "repo": "envie"
+      }
+    ],
+    "files": [
+      "main.js",
+      "preload.js",
+      "renderer.js",
+      "env-parser.js",
+      "index.html",
+      "styles.css"
+    ],
+    "win": {
+      "target": "nsis"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true
+    }
+  }
 }
