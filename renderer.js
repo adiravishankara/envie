@@ -313,6 +313,121 @@ function getGroupNameForKey(key) {
   return 'General';
 }
 
+function getAvailableGroupNames() {
+  return [...new Set(Object.keys(getGroupedKeys()))].sort((a, b) => a.localeCompare(b));
+}
+
+function buildGroupOptionMarkup(value, label = value, isCreate = false) {
+  const safeValue = String(value).replace(/"/g, '&quot;');
+  const safeLabel = String(label).replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  return `
+    <button type="button" class="drawer-group-option${isCreate ? ' is-create' : ''}" data-value="${safeValue}">
+      ${safeLabel}
+    </button>
+  `;
+}
+
+function attachGroupCombobox(card, key, availableGroups) {
+  const wrapper = card.querySelector('.drawer-group-combobox');
+  const input = wrapper?.querySelector('.drawer-group-input');
+  const toggle = wrapper?.querySelector('.drawer-group-toggle');
+  const menu = wrapper?.querySelector('.drawer-group-menu');
+  if (!wrapper || !input || !toggle || !menu) return;
+
+  const getFilteredGroups = (shouldFilter) => {
+    const query = input.value.trim().toLowerCase();
+    if (!query || !shouldFilter) return availableGroups;
+    return availableGroups.filter(group => group.toLowerCase().includes(query));
+  };
+
+  const renderMenu = () => {
+    const shouldFilter = wrapper.dataset.filterMode === 'typed';
+    const filteredGroups = getFilteredGroups(shouldFilter);
+    const normalizedValue = normalizeGroupName(input.value);
+    const hasExactMatch = filteredGroups.some(group => group === normalizedValue) ||
+      availableGroups.some(group => group === normalizedValue);
+
+    let markup = '';
+    if (shouldFilter && normalizedValue && !hasExactMatch) {
+      markup += buildGroupOptionMarkup(normalizedValue, `Create "${normalizedValue}"`, true);
+    }
+
+    if (filteredGroups.length > 0) {
+      markup += filteredGroups.map(group => buildGroupOptionMarkup(group)).join('');
+    } else if (!markup) {
+      markup = '<div class="drawer-group-empty">No matching groups</div>';
+    }
+
+    menu.innerHTML = markup;
+  };
+
+  const openMenu = () => {
+    renderMenu();
+    wrapper.classList.add('open');
+    menu.hidden = false;
+    toggle.setAttribute('aria-expanded', 'true');
+  };
+
+  const closeMenu = () => {
+    wrapper.classList.remove('open');
+    menu.hidden = true;
+    toggle.setAttribute('aria-expanded', 'false');
+  };
+
+  input.addEventListener('focus', openMenu);
+  input.addEventListener('input', () => {
+    wrapper.dataset.filterMode = 'typed';
+    openMenu();
+  });
+  input.addEventListener('click', (event) => {
+    event.stopPropagation();
+    wrapper.dataset.filterMode = 'all';
+    openMenu();
+  });
+
+  toggle.addEventListener('click', (event) => {
+    event.stopPropagation();
+    if (menu.hidden) {
+      wrapper.dataset.filterMode = 'all';
+      input.focus();
+      openMenu();
+    } else {
+      closeMenu();
+    }
+  });
+
+  menu.addEventListener('click', (event) => {
+    const option = event.target.closest('.drawer-group-option');
+    if (!option) return;
+    event.preventDefault();
+    input.value = option.getAttribute('data-value') || '';
+    wrapper.dataset.filterMode = 'all';
+    closeMenu();
+    input.focus();
+  });
+
+  wrapper.addEventListener('focusout', () => {
+    setTimeout(() => {
+      if (!wrapper.contains(document.activeElement)) {
+        closeMenu();
+      }
+    }, 0);
+  });
+
+  wrapper.addEventListener('keydown', (event) => {
+    if (event.key === 'Escape') {
+      closeMenu();
+      input.blur();
+    }
+  });
+
+  document.addEventListener('click', (event) => {
+    if (!wrapper.contains(event.target)) {
+      closeMenu();
+    }
+  });
+}
+
 function isContentfulKey(kUpper) {
   return kUpper.includes('CONTENTFUL') ||
          kUpper.includes('CONTENT_DELIVERY') ||
@@ -555,6 +670,7 @@ function openDrawer(groupName, keysList) {
   activeDrawerGroup = groupName;
   drawerTitle.innerText = `${groupName} Integration Settings`;
   drawerContent.innerHTML = '';
+  const availableGroups = getAvailableGroupNames();
 
   keysList.forEach(key => {
     const keyData = state.keys[key];
@@ -569,7 +685,26 @@ function openDrawer(groupName, keysList) {
       <div class="drawer-var-settings">
         <div>
           <label style="font-size:11px; font-weight:600; text-transform:uppercase; color:var(--text-muted); display:block; margin-bottom:4px;">Service Group</label>
-          <input type="text" class="dropdown-select drawer-group-input" data-key="${key}" value="${keyData.group || ''}" style="width:100%; box-sizing:border-box;" placeholder="${getGroupNameForKey(key)}">
+          <div class="drawer-group-combobox" data-key="${key}">
+            <div class="drawer-group-input-wrap">
+              <input
+                type="text"
+                class="dropdown-select drawer-group-input"
+                data-key="${key}"
+                value="${keyData.group || ''}"
+                style="width:100%; box-sizing:border-box;"
+                placeholder="${getGroupNameForKey(key)}"
+                autocomplete="off"
+              >
+              <button type="button" class="drawer-group-toggle" aria-label="Show service groups" aria-expanded="false">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+                  <polyline points="6 9 12 15 18 9"></polyline>
+                </svg>
+              </button>
+            </div>
+            <div class="drawer-group-menu" hidden></div>
+          </div>
+          <div class="drawer-field-hint">Choose an existing group or type a new one.</div>
         </div>
         <div>
           <label style="font-size:11px; font-weight:600; text-transform:uppercase; color:var(--text-muted); display:block; margin-bottom:4px;">Validation Mode</label>
@@ -606,6 +741,7 @@ function openDrawer(groupName, keysList) {
     // Populate active selector
     const sel = card.querySelector('.drawer-type-select');
     sel.value = keyData.validation?.type || 'none';
+    attachGroupCombobox(card, key, availableGroups);
 
     drawerContent.appendChild(card);
   });
