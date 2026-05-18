@@ -1,0 +1,4 @@
+node_modules
+.env*
+envie.json
+*.bak

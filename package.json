@@ -1,0 +1,17 @@
+{
+  "name": "envie",
+  "version": "1.0.0-alpha",
+  "description": "A simple utility to manage environment variables in a visual format.",
+  "main": "main.js",
+  "devDependencies": {
+    "electron": "^42.1.0"
+  },
+  "scripts": {
+    "start": "electron .",
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs"
+}
