@@ -1,6 +1,22 @@
-# Changelog 📜
+# Changelog
 
 All notable changes to the **Envie** project will be documented in this file.
+
+---
+
+## [1.2.0] - 2026-05-18
+
+### Added
+- **Schema contract** (`.envie/schema.json`): key metadata split from values; auto-seed on project load; pre-apply validation.
+- **Apply diff modal**: Magic UI-inspired side-by-side before/after review with secret masking and reveal toggle.
+- **Apply history**: Snapshots under `.envie/history/` with restore via modal and IPC.
+- **Validator registry** (`validators/`): modular real checks for tcp, http, supabase, clerk, mapbox, resend with unified result shape and `get-validator-types` IPC.
+- **Preview/confirm apply flow**: `preview-apply` and `confirm-apply` IPC; direct target-file write removed from save path.
+
+### Changed
+- README rewritten as a developer-tool document without emojis.
+- Drawer validation dropdown populated from validator registry; required-key checkbox added.
+- Health badges distinguish auth errors (orange) from unreachable (red).
 
 ---
 

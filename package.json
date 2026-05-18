@@ -1,6 +1,6 @@
 {
   "name": "envie",
-  "version": "1.0.0-alpha",
+  "version": "1.2.0-alpha",
   "description": "A simple utility to manage environment variables in a visual format.",
   "main": "main.js",
   "devDependencies": {
@@ -32,6 +32,12 @@
       "renderer.js",
       "env-parser.js",
       "connection-validators.js",
+      "schema-manager.js",
+      "apply-history.js",
+      "secret-mask.js",
+      "env-diff.js",
+      "code-comparison.js",
+      "validators/**/*",
       "index.html",
       "styles.css"
     ],

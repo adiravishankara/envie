@@ -250,6 +250,33 @@
     </div>
   </div>
 
+  <!-- Apply Diff Modal -->
+  <div class="modal-backdrop" id="apply-diff-modal">
+    <div class="modal-card modal-card-wide">
+      <div class="modal-header">
+        <h3>Review Changes Before Apply</h3>
+        <button type="button" class="modal-close" id="btn-close-apply-diff">&times;</button>
+      </div>
+      <div class="modal-body apply-diff-body">
+        <div id="apply-validation-banner" class="apply-validation-banner" hidden></div>
+        <label class="apply-reveal-toggle">
+          <input type="checkbox" id="apply-reveal-secrets">
+          Reveal secrets in diff
+        </label>
+        <div id="apply-diff-mount"></div>
+        <details class="apply-history-details" id="apply-history-details">
+          <summary>Recent Applies</summary>
+          <ul id="apply-history-list" class="apply-history-list"></ul>
+        </details>
+      </div>
+      <div class="modal-actions">
+        <button type="button" class="btn btn-secondary" id="btn-apply-cancel">Cancel</button>
+        <button type="button" class="btn btn-secondary" id="btn-apply-force" disabled>Apply Anyway</button>
+        <button type="button" class="btn btn-primary" id="btn-apply-confirm">Apply</button>
+      </div>
+    </div>
+  </div>
+
   <!-- Toast Notification -->
   <div class="toast-notification" id="toast">
     <div class="toast-icon">
@@ -259,6 +286,9 @@
   </div>
 
   <div class="app-version">v1.0.0-alpha</div>
-  <script src="renderer.js?v=15"></script>
+  <script src="secret-mask.js"></script>
+  <script src="env-diff.js"></script>
+  <script src="code-comparison.js"></script>
+  <script src="renderer.js?v=16"></script>
 </body>
 </html>

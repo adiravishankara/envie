@@ -24,15 +24,32 @@ if (typeof window.api === 'undefined') {
         },
         profiles: {}
       },
+      schema: { version: 1, keys: {} },
       availableFiles: ['.env', '.env.local', '.env.development'],
       activeTargetFile: '.env.local',
       externalDesync: false,
       parsedEnvLocal: null
     }),
-    saveProjectData: async (dir, config, target) => ({ success: true }),
+    saveProjectData: async () => ({ success: true }),
+    previewApply: async () => ({
+      before: 'OLD_KEY=old\n',
+      after: 'NEW_KEY=new\n',
+      diffRows: [{ type: 'modified', before: 'OLD_KEY=old', after: 'NEW_KEY=new' }],
+      validation: { errors: [], warnings: [], valid: true },
+      hasChanges: true,
+      targetFile: '.env.local',
+      activeEnvironment: 'local'
+    }),
+    confirmApply: async () => ({ success: true, snapshotId: 'mock-snapshot' }),
+    listApplyHistory: async () => [],
+    restoreApplySnapshot: async () => ({ success: true, targetFile: '.env.local' }),
+    getValidatorTypes: async () => [
+      { id: 'none', label: 'None (Untested)' },
+      { id: 'tcp', label: 'TCP Network Port' }
+    ],
     logEvent: (level, msg) => console.log(`[Mock ${level}] ${msg}`),
     testConnection: async () => ({
-      status: 'error',
+      status: 'unreachable',
       message: 'Connection checks run in the Electron app only'
     }),
     getSystemInfo: async () => ({ appVersion: '1.0.0-alpha (Mock)' })
@@ -45,12 +62,16 @@ let state = {
   environments: ['local', 'test', 'deployment'],
   activeEnvironment: 'local',
   keys: {},
+  schema: { version: 1, keys: {} },
   availableFiles: [],
   selectedTargetFile: '.env.local',
   systemLogs: [],
   maskSecrets: true,
-  unmaskedKeys: {} // Set of keys currently revealed by the user
+  unmaskedKeys: {}
 };
+
+let validatorTypes = [];
+let applyPreviewCache = null;
 
 // DOM Elements
 const viewWorkspace = document.getElementById('view-workspace');
@@ -143,7 +164,48 @@ function showToast(msg) {
 }
 
 // Background Connections Health Cache
-let connectionStatusCache = {}; // maps keyName -> 'success' | 'auth_error' | 'failed' | 'testing' | 'untested'
+let connectionStatusCache = {};
+
+function getKeySchema(keyName) {
+  if (!state.schema.keys[keyName]) {
+    state.schema.keys[keyName] = {
+      required: false,
+      type: 'string',
+      note: state.keys[keyName]?.note || '',
+      validation: state.keys[keyName]?.validation || { type: 'none' },
+      group: state.keys[keyName]?.group
+    };
+  }
+  return state.schema.keys[keyName];
+}
+
+function buildConfigPayload() {
+  return {
+    environments: state.environments,
+    activeEnvironment: state.activeEnvironment,
+    keys: state.keys
+  };
+}
+
+function buildValidatorOptionsHtml(selectedType) {
+  const types = validatorTypes.length
+    ? validatorTypes
+    : [
+        { id: 'none', label: 'None (Untested)' },
+        { id: 'tcp', label: 'TCP Network Port' },
+        { id: 'clerk', label: 'Clerk Gateway Check' },
+        { id: 'supabase', label: 'Supabase Authorized REST' },
+        { id: 'mapbox', label: 'Mapbox Auth Check' },
+        { id: 'resend', label: 'Resend Bearer Assert' },
+        { id: 'http', label: 'Generic HTTP REST GET' }
+      ];
+  return types
+    .map(
+      (t) =>
+        `<option value="${t.id}" ${t.id === selectedType ? 'selected' : ''}>${t.label}</option>`
+    )
+    .join('');
+}
 
 function updateWorkspaceMeta() {
   const keyCount = Object.keys(state.keys || {}).length;
@@ -209,7 +271,7 @@ async function triggerBackgroundPings() {
       environment: env,
       projectKeys: state.keys
     }).then(res => {
-      if (res.status === 'success') {
+      if (res.status === 'connected' || res.status === 'success' || res.legacyStatus === 'success') {
         connectionStatusCache[keyName] = 'success';
       } else if (res.status === 'auth_error') {
         connectionStatusCache[keyName] = 'auth_error';
@@ -218,7 +280,7 @@ async function triggerBackgroundPings() {
       }
       updateHealthBadges();
 
-      if (res.status === 'success') {
+      if (res.status === 'connected' || res.status === 'success') {
         logEvent(`Connection successful for ${keyName} (${type}): ${res.message}`, 'INFO');
       } else if (res.status === 'auth_error') {
         logEvent(`Auth rejected for ${keyName} (${type}): ${res.message}`, 'WARN');
@@ -712,6 +774,8 @@ function openDrawer(groupName, keysList) {
 
   keysList.forEach(key => {
     const keyData = state.keys[key];
+    const keySchema = getKeySchema(key);
+    const validationType = keySchema.validation?.type || keyData.validation?.type || 'none';
     const card = document.createElement('div');
     card.className = 'drawer-var-card';
     
@@ -729,7 +793,7 @@ function openDrawer(groupName, keysList) {
                 type="text"
                 class="dropdown-select drawer-group-input"
                 data-key="${key}"
-                value="${keyData.group || ''}"
+                value="${keySchema.group || keyData.group || ''}"
                 style="width:100%; box-sizing:border-box;"
                 placeholder="${getGroupNameForKey(key)}"
                 autocomplete="off"
@@ -746,19 +810,14 @@ function openDrawer(groupName, keysList) {
         </div>
         <div>
           <label style="font-size:11px; font-weight:600; text-transform:uppercase; color:var(--text-muted); display:block; margin-bottom:4px;">Validation Mode</label>
-          <select class="dropdown-select drawer-type-select" data-key="${key}" style="width:100%;">
-            <option value="none">None (Untested)</option>
-            <option value="tcp">TCP Network Port</option>
-            <option value="clerk">Clerk Gateway Check</option>
-            <option value="supabase">Supabase Authorized REST</option>
-            <option value="mapbox">Mapbox Auth Check</option>
-            <option value="resend">Resend Bearer Assert</option>
-            <option value="http">Generic HTTP REST GET</option>
-          </select>
+          <select class="dropdown-select drawer-type-select" data-key="${key}" style="width:100%;">${buildValidatorOptionsHtml(validationType)}</select>
         </div>
         <div>
           <label style="font-size:11px; font-weight:600; text-transform:uppercase; color:var(--text-muted); display:block; margin-bottom:4px;">Comment Note</label>
-          <input type="text" class="dropdown-select drawer-note-input" data-key="${key}" value="${keyData.note || ''}" style="width:100%; box-sizing:border-box;" placeholder="Add helpful inline note...">
+          <input type="text" class="dropdown-select drawer-note-input" data-key="${key}" value="${keySchema.note || keyData.note || ''}" style="width:100%; box-sizing:border-box;" placeholder="Add helpful inline note...">
+        </div>
+        <div>
+          <label class="drawer-required-label"><input type="checkbox" class="drawer-required-input" data-key="${key}" ${keySchema.required ? 'checked' : ''}> Required key</label>
         </div>
       </div>
     `;
@@ -778,7 +837,7 @@ function openDrawer(groupName, keysList) {
 
     // Populate active selector
     const sel = card.querySelector('.drawer-type-select');
-    sel.value = keyData.validation?.type || 'none';
+    sel.value = validationType;
     attachGroupCombobox(card, key, availableGroups);
 
     drawerContent.appendChild(card);
@@ -811,6 +870,7 @@ btnDrawerApply.addEventListener('click', () => {
   const groupInputs = drawerContent.querySelectorAll('.drawer-group-input');
   const typeSelects = drawerContent.querySelectorAll('.drawer-type-select');
   const noteInputs = drawerContent.querySelectorAll('.drawer-note-input');
+  const requiredInputs = drawerContent.querySelectorAll('.drawer-required-input');
 
   valInputs.forEach(input => {
     const key = input.getAttribute('data-key');
@@ -823,19 +883,30 @@ btnDrawerApply.addEventListener('click', () => {
     const group = normalizeGroupName(input.value);
     if (group) {
       state.keys[key].group = group;
+      getKeySchema(key).group = group;
     } else {
       delete state.keys[key].group;
+      delete getKeySchema(key).group;
     }
   });
 
   typeSelects.forEach(select => {
     const key = select.getAttribute('data-key');
-    state.keys[key].validation = { type: select.value };
+    const type = select.value;
+    state.keys[key].validation = { type };
+    getKeySchema(key).validation = { type };
   });
 
   noteInputs.forEach(input => {
     const key = input.getAttribute('data-key');
-    state.keys[key].note = input.value;
+    const note = input.value;
+    state.keys[key].note = note;
+    getKeySchema(key).note = note;
+  });
+
+  requiredInputs.forEach(input => {
+    const key = input.getAttribute('data-key');
+    getKeySchema(key).required = input.checked;
   });
 
   logEvent(`Updated local configurations for variables in ${activeDrawerGroup}`, 'INFO');
@@ -958,6 +1029,7 @@ async function closeProject() {
 
   state.activeProjectPath = null;
   state.keys = {};
+  state.schema = { version: 1, keys: {} };
   state.environments = ['local', 'test', 'deployment'];
   state.activeEnvironment = 'local';
   state.availableFiles = [];
@@ -988,6 +1060,7 @@ async function loadProject(dir) {
     
     const data = await window.api.loadProjectData(dir);
     state.keys = data.config.keys;
+    state.schema = data.schema || { version: 1, keys: {} };
     state.environments = data.config.environments;
     state.activeEnvironment = data.config.activeEnvironment || 'local';
     state.availableFiles = data.availableFiles;
@@ -1027,6 +1100,7 @@ async function loadProject(dir) {
         for (const [k, v] of Object.entries(data.parsedEnvLocal)) {
           if (!state.keys[k]) {
             state.keys[k] = { values: {}, note: v.note, active: 'local', validation: { type: 'none' } };
+            getKeySchema(k).note = v.note || '';
           }
           state.keys[k].values[state.activeEnvironment] = v.value;
         }
@@ -1119,7 +1193,143 @@ document.getElementById('btn-sync-project').addEventListener('click', async () =
   }
 });
 
-// Save Project Handler
+// Apply diff modal elements
+const applyDiffModal = document.getElementById('apply-diff-modal');
+const applyDiffMount = document.getElementById('apply-diff-mount');
+const applyValidationBanner = document.getElementById('apply-validation-banner');
+const applyRevealSecrets = document.getElementById('apply-reveal-secrets');
+const btnApplyCancel = document.getElementById('btn-apply-cancel');
+const btnApplyForce = document.getElementById('btn-apply-force');
+const btnApplyConfirm = document.getElementById('btn-apply-confirm');
+const btnCloseApplyDiff = document.getElementById('btn-close-apply-diff');
+const applyHistoryList = document.getElementById('apply-history-list');
+
+function renderApplyValidationBanner(validation) {
+  if (!validation || (!validation.errors?.length && !validation.warnings?.length)) {
+    applyValidationBanner.hidden = true;
+    applyValidationBanner.innerHTML = '';
+    return;
+  }
+
+  const items = [
+  ...(validation.errors || []).map((e) => `<li class="validation-error">${e.message}</li>`),
+  ...(validation.warnings || []).map((w) => `<li class="validation-warning">${w.message}</li>`)
+  ].join('');
+
+  applyValidationBanner.hidden = false;
+  applyValidationBanner.innerHTML = `<ul class="validation-list">${items}</ul>`;
+  btnApplyForce.disabled = !(validation.errors?.length);
+  btnApplyConfirm.disabled = validation.errors?.length > 0;
+}
+
+function renderApplyDiffModal() {
+  if (!applyPreviewCache) return;
+  const reveal = applyRevealSecrets.checked;
+  const maskFn = (text) => (window.maskEnvContent ? window.maskEnvContent(text) : text);
+
+  window.renderCodeComparison(applyDiffMount, {
+    filename: applyPreviewCache.targetFile,
+    revealSecrets: reveal,
+    maskFn,
+    diffRows: applyPreviewCache.diffRows
+  });
+}
+
+async function loadApplyHistoryList() {
+  if (!applyHistoryList || !state.activeProjectPath) return;
+  const history = await window.api.listApplyHistory(state.activeProjectPath);
+  applyHistoryList.innerHTML = '';
+
+  if (!history.length) {
+    applyHistoryList.innerHTML = '<li class="apply-history-empty">No apply history yet</li>';
+    return;
+  }
+
+  history.slice(0, 5).forEach((snap) => {
+    const li = document.createElement('li');
+    const when = new Date(snap.createdAt).toLocaleString();
+    li.innerHTML = `
+      <span>${when} — ${snap.targetFile} (${snap.activeEnvironment})</span>
+      <button type="button" class="btn btn-secondary btn-restore-snapshot" data-id="${snap.id}">Restore</button>
+    `;
+    li.querySelector('.btn-restore-snapshot').onclick = async () => {
+      if (!confirm(`Restore ${snap.targetFile} to the state before this apply?`)) return;
+      const res = await window.api.restoreApplySnapshot(state.activeProjectPath, snap.id);
+      if (res.success) {
+        logEvent(`Restored snapshot ${snap.id} to ${res.targetFile}`, 'INFO');
+        showToast('Snapshot restored');
+        closeApplyDiffModal();
+        await loadProject(state.activeProjectPath);
+      } else {
+        logEvent(`Restore failed: ${res.error}`, 'ERROR');
+        showToast('Restore failed');
+      }
+    };
+    applyHistoryList.appendChild(li);
+  });
+}
+
+function openApplyDiffModal(preview) {
+  applyPreviewCache = preview;
+  renderApplyValidationBanner(preview.validation);
+  renderApplyDiffModal();
+  loadApplyHistoryList();
+  applyDiffModal.classList.add('show');
+}
+
+function closeApplyDiffModal() {
+  applyDiffModal.classList.remove('show');
+  applyPreviewCache = null;
+}
+
+btnApplyCancel.addEventListener('click', closeApplyDiffModal);
+btnCloseApplyDiff.addEventListener('click', closeApplyDiffModal);
+applyRevealSecrets.addEventListener('change', renderApplyDiffModal);
+
+btnApplyConfirm.addEventListener('click', async () => {
+  if (!applyPreviewCache || !state.activeProjectPath) return;
+  btnApplyConfirm.disabled = true;
+  const res = await window.api.confirmApply(
+    state.activeProjectPath,
+    buildConfigPayload(),
+    state.schema,
+    applyPreviewCache.targetFile,
+    { force: false }
+  );
+  btnApplyConfirm.disabled = false;
+
+  if (res.success) {
+    logEvent(`Applied to ${applyPreviewCache.targetFile} (snapshot ${res.snapshotId})`, 'INFO');
+    showToast(`Applied to ${applyPreviewCache.targetFile}`);
+    closeApplyDiffModal();
+    await loadProject(state.activeProjectPath);
+  } else {
+    logEvent(`Apply failed: ${res.error}`, 'ERROR');
+    showToast('Apply failed');
+  }
+});
+
+btnApplyForce.addEventListener('click', async () => {
+  if (!applyPreviewCache || !state.activeProjectPath) return;
+  const res = await window.api.confirmApply(
+    state.activeProjectPath,
+    buildConfigPayload(),
+    state.schema,
+    applyPreviewCache.targetFile,
+    { force: true }
+  );
+
+  if (res.success) {
+    logEvent(`Force-applied to ${applyPreviewCache.targetFile} (snapshot ${res.snapshotId})`, 'WARN');
+    showToast(`Applied to ${applyPreviewCache.targetFile}`);
+    closeApplyDiffModal();
+    await loadProject(state.activeProjectPath);
+  } else {
+    logEvent(`Force apply failed: ${res.error}`, 'ERROR');
+    showToast('Apply failed');
+  }
+});
+
 btnSaveEnv.addEventListener('click', async () => {
   if (!state.activeProjectPath) return;
 
@@ -1129,28 +1339,26 @@ btnSaveEnv.addEventListener('click', async () => {
     logEvent('Error: Target output file cannot be empty or .envie', 'ERROR');
     return;
   }
-  const configToSave = {
-    environments: state.environments,
-    activeEnvironment: state.activeEnvironment,
-    keys: state.keys
-  };
 
   const oldText = btnSaveEnv.innerHTML;
-  btnSaveEnv.innerText = 'Applying...';
-  
-  const res = await window.api.saveProjectData(state.activeProjectPath, configToSave, targetFile);
-  
+  btnSaveEnv.innerText = 'Preparing...';
+
+  const preview = await window.api.previewApply(
+    state.activeProjectPath,
+    buildConfigPayload(),
+    state.schema,
+    targetFile
+  );
+
   btnSaveEnv.innerHTML = oldText;
 
-  if (res.success) {
-    showToast(`Saved & Exported to ${targetFile}`);
-    logEvent(`Saved config and output to ${targetFile}`, 'INFO');
-    // Also trigger recent project list reload to ensure workspace is in order
-    await refreshRecentProjects();
-  } else {
-    showToast('Error saving file');
-    logEvent(`Failed to save: ${res.error}`, 'ERROR');
+  if (preview.error) {
+    logEvent(`Preview failed: ${preview.error}`, 'ERROR');
+    showToast('Preview failed');
+    return;
   }
+
+  openApplyDiffModal(preview);
 });
 
 targetEnvSelect.addEventListener('change', (e) => {
@@ -1169,6 +1377,7 @@ window.api.getSystemInfo().then(info => {
 // Load recent projects and last active project on startup!
 async function initApp() {
   try {
+    validatorTypes = (await window.api.getValidatorTypes()) || [];
     const { recentProjects, lastActiveProject } = await window.api.getRecentProjects();
     state.recentProjects = recentProjects || [];
     updateProjectChrome();

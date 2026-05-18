@@ -3,7 +3,11 @@ const path = require('path');
 const fs = require('fs');
 const https = require('https');
 const envParser = require('./env-parser');
-const { runConnectionTest } = require('./connection-validators');
+const { runValidator, getValidatorTypes } = require('./validators');
+const schemaManager = require('./schema-manager');
+const applyHistory = require('./apply-history');
+const { maskEnvContent } = require('./secret-mask');
+const { computeLineDiff, hasDiffChanges } = require('./env-diff');
 
 function checkManualUpdates() {
   const currentVersion = app.getVersion(); // e.g., '1.0.0'
@@ -280,33 +284,121 @@ app.whenReady().then(() => {
       logToFile('Created initial .envie/config.json database file.', 'INFO');
     }
 
-    return { config, activeTargetFile, availableFiles, externalDesync, parsedEnvLocal };
+    const parsedEnvRecord = parsedEnvLocal || {};
+    const schema = schemaManager.ensureSchema(projectPath, config, parsedEnvRecord);
+    const mergedConfig = schemaManager.mergeSchemaIntoConfig(config, schema);
+
+    return {
+      config: mergedConfig,
+      schema,
+      activeTargetFile,
+      availableFiles,
+      externalDesync,
+      parsedEnvLocal
+    };
   });
 
-  // Save project
-  ipcMain.handle('save-project-data', async (event, projectPath, config, targetFile) => {
+  ipcMain.handle('get-validator-types', () => getValidatorTypes());
+
+  ipcMain.handle('preview-apply', async (event, projectPath, config, schema, targetFile) => {
+    try {
+      if (targetFile === '.envie') {
+        throw new Error('Target output file cannot be .envie');
+      }
+
+      const activeEnv = config.activeEnvironment || 'local';
+      const validation = schemaManager.validateBeforeApply(config, schema, activeEnv);
+      const after = envParser.stringify(config.keys, activeEnv);
+      const targetPath = path.join(projectPath, targetFile);
+      const before = fs.existsSync(targetPath) ? fs.readFileSync(targetPath, 'utf8') : '';
+      const diffRows = computeLineDiff(before, after);
+
+      return {
+        before,
+        after,
+        afterMasked: maskEnvContent(after),
+        beforeMasked: maskEnvContent(before),
+        validation,
+        hasChanges: before !== after || hasDiffChanges(diffRows),
+        diffRows,
+        activeEnvironment: activeEnv,
+        targetFile
+      };
+    } catch (err) {
+      return { error: err.message };
+    }
+  });
+
+  ipcMain.handle('confirm-apply', async (event, projectPath, config, schema, targetFile, options = {}) => {
+    try {
+      if (targetFile === '.envie') {
+        throw new Error('Target output file cannot be .envie');
+      }
+
+      const activeEnv = config.activeEnvironment || 'local';
+      const validation = schemaManager.validateBeforeApply(config, schema, activeEnv);
+      if (!options.force && !validation.valid) {
+        return { success: false, error: 'Validation failed', validation };
+      }
+
+      const targetPath = path.join(projectPath, targetFile);
+      const before = fs.existsSync(targetPath) ? fs.readFileSync(targetPath, 'utf8') : '';
+      const after = envParser.stringify(config.keys, activeEnv);
+
+      const snapshotId = applyHistory.saveSnapshot(projectPath, {
+        targetFile,
+        activeEnvironment: activeEnv,
+        before,
+        after
+      });
+
+      const envieConfigPath = path.join(projectPath, '.envie', 'config.json');
+      const schemaPath = path.join(projectPath, '.envie', 'schema.json');
+      envParser.safeWrite(envieConfigPath, JSON.stringify(config, null, 2));
+      envParser.safeWrite(schemaPath, JSON.stringify(schema, null, 2));
+      envParser.safeWrite(targetPath, after);
+      envParser.ensureGitignored(projectPath);
+
+      logToFile(`Applied variables to ${targetFile} (snapshot ${snapshotId})`, 'INFO');
+      return { success: true, snapshotId, validation };
+    } catch (err) {
+      logToFile(`Confirm apply failed: ${err.message}`, 'ERROR');
+      return { success: false, error: err.message };
+    }
+  });
+
+  ipcMain.handle('list-apply-history', async (event, projectPath) => {
+    return applyHistory.listSnapshots(projectPath).slice(0, 20);
+  });
+
+  ipcMain.handle('restore-apply-snapshot', async (event, projectPath, snapshotId) => {
+    try {
+      const result = applyHistory.restoreSnapshot(projectPath, snapshotId);
+      logToFile(`Restored snapshot ${snapshotId} to ${result.targetFile}`, 'INFO');
+      return { success: true, ...result };
+    } catch (err) {
+      return { success: false, error: err.message };
+    }
+  });
+
+  // Save project (config only, no target file write — used by drawer saves if needed)
+  ipcMain.handle('save-project-data', async (event, projectPath, config, schema, targetFile) => {
     try {
       if (targetFile === '.envie') {
         throw new Error('Target output file cannot be .envie');
       }
       
-      logToFile(`Saving project config to .envie/config.json and applying to ${targetFile}...`, 'INFO');
-      
-      // Save JSON
+      logToFile(`Saving project config to .envie/config.json...`, 'INFO');
+
       const envieConfigPath = path.join(projectPath, '.envie', 'config.json');
+      const schemaPath = path.join(projectPath, '.envie', 'schema.json');
       envParser.safeWrite(envieConfigPath, JSON.stringify(config, null, 2));
-
-      // Stringify & Save .env
-      const activeEnv = config.activeEnvironment || 'local';
-      const envContent = envParser.stringify(config.keys, activeEnv);
-      const targetPath = path.join(projectPath, targetFile);
-      
-      envParser.safeWrite(targetPath, envContent);
-
-      // Protect
+      if (schema) {
+        envParser.safeWrite(schemaPath, JSON.stringify(schema, null, 2));
+      }
       envParser.ensureGitignored(projectPath);
 
-      logToFile(`Successfully applied variables to ${targetFile}.`, 'INFO');
+      logToFile(`Successfully saved project config.`, 'INFO');
       return { success: true };
     } catch (err) {
       logToFile(`Save failed: ${err.message}`, 'ERROR');
@@ -321,10 +413,19 @@ app.whenReady().then(() => {
     logToFile(`Pinging connection [${type}] for key ${keyName}...`, 'INFO');
 
     try {
-      const result = await runConnectionTest(payload);
-      const level = result.status === 'success' ? 'INFO' : result.status === 'auth_error' ? 'WARN' : 'ERROR';
+      const result = await runValidator(type, payload?.value, payload);
+      const level =
+        result.status === 'connected' ? 'INFO' : result.status === 'auth_error' ? 'WARN' : 'ERROR';
       logToFile(`Connection [${type}] ${keyName}: ${result.message}`, level);
-      return result;
+      return {
+        ...result,
+        legacyStatus:
+          result.status === 'connected'
+            ? 'success'
+            : result.status === 'auth_error'
+              ? 'auth_error'
+              : 'failed'
+      };
     } catch (err) {
       logToFile(`Connection [${type}] ${keyName} failed: ${err.message}`, 'ERROR');
       return {
