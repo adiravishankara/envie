@@ -1,6 +1,6 @@
 {
   "name": "envie",
-  "version": "1.2.0-alpha",
+  "version": "1.0.1",
   "description": "A simple utility to manage environment variables in a visual format.",
   "main": "main.js",
   "devDependencies": {
