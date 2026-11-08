@@ -55,9 +55,10 @@ function parse(content) {
  * @param {string} activeEnv - The fallback active environment (e.g. 'local')
  * @returns {string} Compiled .env file content
  */
-function stringify(keys, activeEnv) {
+function stringify(keys, activeEnv, options = {}) {
   let output = '';
-  for (const [keyName, keyData] of Object.entries(keys)) {
+  const useProfile = Boolean(options.profile);
+  for (const [keyName, keyData] of Object.entries(keys || {})) {
     // If there is a note, append it as a comment block
     if (keyData.note) {
       const noteLines = keyData.note.split('\n');
@@ -65,10 +66,10 @@ function stringify(keys, activeEnv) {
         output += `# ${noteLine}\n`;
       }
     }
-    
-    // Get the value for this key's selected environment, falling back to the workspace preset.
-    const selectedEnv = keyData.active || activeEnv;
-    let val = keyData.values[selectedEnv] || '';
+
+    // A profile file is one whole stack. Per-key selection stays out of it.
+    const selectedEnv = useProfile ? activeEnv : (keyData.active || activeEnv);
+    let val = (keyData.values && keyData.values[selectedEnv]) || '';
     
     // If value contains spaces, wrap in double quotes
     if (val.includes(' ') && !val.startsWith('"') && !val.endsWith('"')) {

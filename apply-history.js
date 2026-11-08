@@ -1,5 +1,6 @@
 const fs = require('fs');
 const path = require('path');
+const { resolveProjectFile } = require('./profile-link');
 
 const MAX_SNAPSHOTS = 20;
 
@@ -36,12 +37,14 @@ function saveSnapshot(projectPath, payload) {
   if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
 
   const id = new Date().toISOString().replace(/[:.]/g, '-');
+  const files = Array.isArray(payload.files) ? payload.files : null;
   const record = {
     id,
-    targetFile: payload.targetFile,
+    targetFile: payload.targetFile || files?.[0]?.targetFile || 'profiles',
     activeEnvironment: payload.activeEnvironment,
-    before: payload.before,
-    after: payload.after,
+    before: payload.before ?? '',
+    after: payload.after ?? '',
+    files,
     createdAt: new Date().toISOString()
   };
 
@@ -75,8 +78,34 @@ function restoreSnapshot(projectPath, snapshotId) {
     throw new Error('Snapshot not found');
   }
 
-  const targetPath = path.join(projectPath, snap.targetFile);
-  fs.writeFileSync(targetPath, snap.before, 'utf8');
+  if (Array.isArray(snap.files) && snap.files.length) {
+    for (const file of snap.files) {
+      const targetPath = resolveProjectFile(projectPath, file.targetFile);
+      if (!file.existed) {
+        try {
+          fs.lstatSync(targetPath);
+          fs.unlinkSync(targetPath);
+        } catch {
+          /* missing */
+        }
+      } else {
+        fs.writeFileSync(targetPath, file.before ?? '', 'utf8');
+      }
+    }
+    return {
+      targetFile: snap.files.map((file) => file.targetFile).join(', '),
+      restoredAt: new Date().toISOString()
+    };
+  }
+
+  const targetPath = resolveProjectFile(projectPath, snap.targetFile);
+  try {
+    fs.lstatSync(targetPath);
+    fs.unlinkSync(targetPath);
+  } catch {
+    /* missing */
+  }
+  fs.writeFileSync(targetPath, snap.before ?? '', 'utf8');
   return { targetFile: snap.targetFile, restoredAt: new Date().toISOString() };
 }
 

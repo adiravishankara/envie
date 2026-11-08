@@ -9,10 +9,12 @@ contextBridge.exposeInMainWorld('api', {
   loadProjectData: (projectPath) => ipcRenderer.invoke('load-project-data', projectPath),
   saveProjectData: (projectPath, config, schema, targetFile) =>
     ipcRenderer.invoke('save-project-data', projectPath, config, schema, targetFile),
-  previewApply: (projectPath, config, schema, targetFile) =>
-    ipcRenderer.invoke('preview-apply', projectPath, config, schema, targetFile),
+  previewApply: (projectPath, config, schema) =>
+    ipcRenderer.invoke('preview-apply', projectPath, config, schema),
   confirmApply: (projectPath, config, schema, targetFile, options) =>
     ipcRenderer.invoke('confirm-apply', projectPath, config, schema, targetFile, options),
+  switchProfile: (projectPath, config, schema, environment, options) =>
+    ipcRenderer.invoke('switch-profile', projectPath, config, schema, environment, options),
   listApplyHistory: (projectPath) => ipcRenderer.invoke('list-apply-history', projectPath),
   restoreApplySnapshot: (projectPath, snapshotId) =>
     ipcRenderer.invoke('restore-apply-snapshot', projectPath, snapshotId),

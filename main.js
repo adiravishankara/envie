@@ -6,6 +6,7 @@ const envParser = require('./env-parser');
 const { runValidator, getValidatorTypes } = require('./validators');
 const schemaManager = require('./schema-manager');
 const applyHistory = require('./apply-history');
+const profileLink = require('./profile-link');
 const { maskEnvContent } = require('./secret-mask');
 const { computeLineDiff, hasDiffChanges } = require('./env-diff');
 
@@ -202,115 +203,117 @@ app.whenReady().then(() => {
   ipcMain.handle('load-project-data', async (event, projectPath) => {
     logToFile(`Loading project: ${projectPath}`, 'INFO');
     const envieConfigPath = path.join(projectPath, '.envie', 'config.json');
-    
-    // Track loaded project in recents list
+
     addRecentProject(projectPath);
-    
-    // Ensure .gitignore is protecting us
     envParser.ensureGitignored(projectPath);
 
     let config = null;
-    let externalDesync = false;
-    let parsedEnvLocal = null;
 
-    // Scan for available .env files, ensuring they are actual files and not .envie directory or files
-    const availableFiles = fs.readdirSync(projectPath).filter(file => {
+    const availableFiles = fs.readdirSync(projectPath).filter((file) => {
       try {
         const fullPath = path.join(projectPath, file);
-        return file.startsWith('.env') && 
-               !file.endsWith('.bak') && 
-               file !== '.envie' && 
-               fs.statSync(fullPath).isFile();
+        const stat = fs.lstatSync(fullPath);
+        return file.startsWith('.env') &&
+               !file.endsWith('.bak') &&
+               file !== '.envie' &&
+               (stat.isFile() || stat.isSymbolicLink());
       } catch (e) {
         return false;
       }
     });
-    let activeTargetFile = availableFiles.includes('.env.local') ? '.env.local' : (availableFiles.length > 0 ? availableFiles[0] : '.env');
 
     if (fs.existsSync(envieConfigPath)) {
       try {
         config = JSON.parse(fs.readFileSync(envieConfigPath, 'utf8'));
         logToFile('.envie/config.json loaded successfully.', 'INFO');
-        
-        // Cold Boot Diff Check
-        const targetPath = path.join(projectPath, activeTargetFile);
-        if (fs.existsSync(targetPath)) {
-          const rawContent = fs.readFileSync(targetPath, 'utf8');
-          parsedEnvLocal = envParser.parse(rawContent);
-          
-          // Basic diff check logic: check if keys match each key's selected env in config
-          const activeEnv = config.activeEnvironment || 'local';
-          for (const [k, v] of Object.entries(parsedEnvLocal)) {
-            const selectedEnv = config.keys[k]?.active || activeEnv;
-            if (!config.keys[k] || config.keys[k].values[selectedEnv] !== v.value) {
-              externalDesync = true;
-              break;
-            }
-          }
-          if (externalDesync) {
-            logToFile(`Cold Boot Desync detected between .envie/config.json and ${activeTargetFile}`, 'WARN');
-          }
-        }
       } catch (err) {
         logToFile(`Error parsing .envie/config.json: ${err.message}`, 'ERROR');
       }
     } else {
-      // Seed a new project!
       logToFile('.envie/config.json not found. Seeding a new project database.', 'INFO');
       config = {
-        environments: ['local', 'test', 'deployment'],
+        environments: ['local', 'staging', 'production'],
         activeEnvironment: 'local',
+        mount: { target: '.env.local', mode: 'symlink' },
         keys: {}
       };
 
-      const targetPath = path.join(projectPath, activeTargetFile);
-      if (fs.existsSync(targetPath)) {
-        const rawContent = fs.readFileSync(targetPath, 'utf8');
+      const seedName = availableFiles.includes('.env.local')
+        ? '.env.local'
+        : availableFiles.includes('.env')
+          ? '.env'
+          : null;
+      if (seedName) {
+        const rawContent = fs.readFileSync(path.join(projectPath, seedName), 'utf8');
         const parsed = envParser.parse(rawContent);
-        
+
         for (const [key, data] of Object.entries(parsed)) {
           config.keys[key] = {
-            values: { local: data.value, test: '', deployment: '' },
+            values: { local: data.value, staging: '', production: '' },
             note: data.note,
             active: 'local',
             validation: { type: 'none' }
           };
         }
-        logToFile(`Seeded ${Object.keys(parsed).length} keys from ${activeTargetFile}`, 'INFO');
+        logToFile(`Seeded ${Object.keys(parsed).length} keys from ${seedName} into the local profile`, 'INFO');
       }
 
-      // Write newly seeded config immediately to create the .envie directory and config.json
       envParser.safeWrite(envieConfigPath, JSON.stringify(config, null, 2));
       logToFile('Created initial .envie/config.json database file.', 'INFO');
     }
 
-    const parsedEnvRecord = parsedEnvLocal || {};
+    if (!config) {
+      return { error: 'Could not read .envie/config.json' };
+    }
+
+    if (!config.mount) {
+      config.mount = { target: '.env.local', mode: 'symlink' };
+    }
+
+    const mount = profileLink.inspectMount(projectPath, config);
+    profileLink.ensureMountGitignore(projectPath, mount.targetFile);
+
+    const parsedEnvRecord = mount.exists ? envParser.parse(mount.content) : {};
     const schema = schemaManager.ensureSchema(projectPath, config, parsedEnvRecord);
     const mergedConfig = schemaManager.mergeSchemaIntoConfig(config, schema);
+
+    if (mount.status === 'plain-file' && mount.needsReplace) {
+      logToFile(`Mount target ${mount.targetFile} is a plain file that differs from the active profile`, 'WARN');
+    } else if (mount.status === 'wrong-link') {
+      logToFile(`Mount target ${mount.targetFile} points at ${mount.linkTarget}, expected ${mount.expectedLink}`, 'WARN');
+    }
 
     return {
       config: mergedConfig,
       schema,
-      activeTargetFile,
+      mount: {
+        targetFile: mount.targetFile,
+        mode: mount.mode,
+        status: mount.status,
+        symlink: mount.symlink,
+        linkTarget: mount.linkTarget,
+        expectedLink: mount.expectedLink,
+        inSync: mount.inSync,
+        needsReplace: mount.needsReplace,
+        activeEnvironment: mount.activeEnvironment
+      },
+      activeTargetFile: mount.targetFile,
       availableFiles,
-      externalDesync,
-      parsedEnvLocal
+      externalDesync: mount.needsReplace || mount.status === 'wrong-link',
+      parsedEnvLocal: mount.exists ? parsedEnvRecord : null
     };
   });
 
   ipcMain.handle('get-validator-types', () => getValidatorTypes());
 
-  ipcMain.handle('preview-apply', async (event, projectPath, config, schema, targetFile) => {
+  ipcMain.handle('preview-apply', async (event, projectPath, config, schema) => {
     try {
-      if (targetFile === '.envie') {
-        throw new Error('Target output file cannot be .envie');
-      }
-
+      if (!config.mount) config.mount = { target: '.env.local', mode: 'symlink' };
       const activeEnv = config.activeEnvironment || 'local';
-      const validation = schemaManager.validateBeforeApply(config, schema, activeEnv);
-      const after = envParser.stringify(config.keys, activeEnv);
-      const targetPath = path.join(projectPath, targetFile);
-      const before = fs.existsSync(targetPath) ? fs.readFileSync(targetPath, 'utf8') : '';
+      const validation = schemaManager.validateBeforeApply(config, schema, activeEnv, { profile: true });
+      const mount = profileLink.inspectMount(projectPath, config);
+      const after = profileLink.renderProfile(config.keys, activeEnv);
+      const before = mount.content || '';
       const diffRows = computeLineDiff(before, after);
 
       return {
@@ -319,50 +322,146 @@ app.whenReady().then(() => {
         afterMasked: maskEnvContent(after),
         beforeMasked: maskEnvContent(before),
         validation,
-        hasChanges: before !== after || hasDiffChanges(diffRows),
+        hasChanges: before !== after || hasDiffChanges(diffRows) || !mount.inSync,
         diffRows,
         activeEnvironment: activeEnv,
-        targetFile
+        targetFile: mount.targetFile,
+        mount: {
+          mode: mount.mode,
+          status: mount.status,
+          expectedLink: mount.expectedLink,
+          needsReplace: mount.needsReplace
+        }
       };
     } catch (err) {
       return { error: err.message };
     }
   });
 
-  ipcMain.handle('confirm-apply', async (event, projectPath, config, schema, targetFile, options = {}) => {
+  ipcMain.handle('confirm-apply', async (event, projectPath, config, schema, _targetFile, options = {}) => {
     try {
-      if (targetFile === '.envie') {
-        throw new Error('Target output file cannot be .envie');
-      }
-
+      if (!config.mount) config.mount = { target: '.env.local', mode: 'symlink' };
       const activeEnv = config.activeEnvironment || 'local';
-      const validation = schemaManager.validateBeforeApply(config, schema, activeEnv);
+      profileLink.syncKeyActives(config, activeEnv);
+
+      const validation = schemaManager.validateBeforeApply(config, schema, activeEnv, { profile: true });
       if (!options.force && !validation.valid) {
         return { success: false, error: 'Validation failed', validation };
       }
 
-      const targetPath = path.join(projectPath, targetFile);
-      const before = fs.existsSync(targetPath) ? fs.readFileSync(targetPath, 'utf8') : '';
-      const after = envParser.stringify(config.keys, activeEnv);
+      const mountBefore = profileLink.inspectMount(projectPath, config);
+      const after = profileLink.renderProfile(config.keys, activeEnv);
 
       const snapshotId = applyHistory.saveSnapshot(projectPath, {
-        targetFile,
+        targetFile: mountBefore.targetFile,
         activeEnvironment: activeEnv,
-        before,
+        before: mountBefore.content,
         after
       });
+
+      const remounted = profileLink.remount(projectPath, config);
+      config.mount = {
+        target: remounted.targetFile,
+        mode: remounted.mode
+      };
 
       const envieConfigPath = path.join(projectPath, '.envie', 'config.json');
       const schemaPath = path.join(projectPath, '.envie', 'schema.json');
       envParser.safeWrite(envieConfigPath, JSON.stringify(config, null, 2));
       envParser.safeWrite(schemaPath, JSON.stringify(schema, null, 2));
-      envParser.safeWrite(targetPath, after);
       envParser.ensureGitignored(projectPath);
+      profileLink.ensureMountGitignore(projectPath, remounted.targetFile);
 
-      logToFile(`Applied variables to ${targetFile} (snapshot ${snapshotId})`, 'INFO');
-      return { success: true, snapshotId, validation };
+      logToFile(
+        `Mounted ${remounted.targetFile} -> ${remounted.mode === 'symlink' ? remounted.linkTarget : 'copy'} (${activeEnv}, snapshot ${snapshotId})`,
+        'INFO'
+      );
+      return {
+        success: true,
+        snapshotId,
+        validation,
+        mount: {
+          targetFile: remounted.targetFile,
+          mode: remounted.mode,
+          linkTarget: remounted.linkTarget,
+          fallbackReason: remounted.fallbackReason
+        }
+      };
     } catch (err) {
       logToFile(`Confirm apply failed: ${err.message}`, 'ERROR');
+      return { success: false, error: err.message };
+    }
+  });
+
+  ipcMain.handle('switch-profile', async (event, projectPath, config, schema, environment, options = {}) => {
+    try {
+      if (!config.environments?.includes(environment)) {
+        return { success: false, error: `Unknown environment ${environment}` };
+      }
+
+      if (!config.mount) config.mount = { target: '.env.local', mode: 'symlink' };
+      profileLink.syncKeyActives(config, environment);
+
+      const validation = schemaManager.validateBeforeApply(config, schema, environment, { profile: true });
+      if (!options.force && !validation.valid) {
+        return { success: false, error: 'Validation failed', validation };
+      }
+
+      const mountBefore = profileLink.inspectMount(projectPath, config);
+      if (mountBefore.needsReplace && !options.force && !options.confirmedReplace) {
+        const after = profileLink.renderProfile(config.keys, environment);
+        return {
+          success: false,
+          needsConfirm: true,
+          validation,
+          preview: {
+            before: mountBefore.content,
+            after,
+            targetFile: mountBefore.targetFile,
+            activeEnvironment: environment,
+            diffRows: computeLineDiff(mountBefore.content, after)
+          }
+        };
+      }
+
+      const after = profileLink.renderProfile(config.keys, environment);
+      const snapshotId = applyHistory.saveSnapshot(projectPath, {
+        targetFile: mountBefore.targetFile,
+        activeEnvironment: environment,
+        before: mountBefore.content,
+        after
+      });
+
+      const remounted = profileLink.remount(projectPath, config, {
+        forceMode: options.forceMode || config.mount.mode
+      });
+      config.mount = {
+        target: remounted.targetFile,
+        mode: remounted.mode
+      };
+
+      const envieConfigPath = path.join(projectPath, '.envie', 'config.json');
+      const schemaPath = path.join(projectPath, '.envie', 'schema.json');
+      envParser.safeWrite(envieConfigPath, JSON.stringify(config, null, 2));
+      if (schema) envParser.safeWrite(schemaPath, JSON.stringify(schema, null, 2));
+      envParser.ensureGitignored(projectPath);
+      profileLink.ensureMountGitignore(projectPath, remounted.targetFile);
+
+      logToFile(`Switched profile to ${environment} via ${remounted.mode}`, 'INFO');
+      return {
+        success: true,
+        snapshotId,
+        validation,
+        config,
+        mount: {
+          targetFile: remounted.targetFile,
+          mode: remounted.mode,
+          linkTarget: remounted.linkTarget,
+          fallbackReason: remounted.fallbackReason
+        }
+      };
+    } catch (err) {
+      logToFile(`Profile switch failed: ${err.message}`, 'ERROR');
       return { success: false, error: err.message };
     }
   });

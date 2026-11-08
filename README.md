@@ -1,26 +1,37 @@
 # Envie
 
-Envie is a local-first desktop application for managing environment variables across project stages (`local`, `test`, `staging`, `deployment`, and custom names). It is built with Electron, vanilla JavaScript, HTML, and CSS.
+Envie is a local-first desktop application for managing environment variable **profiles** in a project. It is built with Electron, vanilla JavaScript, HTML, and CSS.
 
-Envie helps you avoid manual `.env` editing, copy-paste drift between environments, and silent credential failures. Before writing changes to disk, you review a side-by-side diff. Connection validators run real network checks against databases and third-party APIs.
+Model: **project → keys → profiles**. Each profile holds a full value set for every key. Envie owns the real data under `.envie/`. Your app keeps reading `.env.local`; Envie points that path at the active profile.
 
-Envie is **not** a team secrets manager. All data stays on your machine under `.envie/`.
+Envie is **not** a team secrets manager yet. All data stays on your machine under `.envie/`.
 
 ---
 
 ## Problem
 
-Developers often maintain multiple environment-specific values for the same keys. Switching stages means editing `.env.local` by hand, hoping values match what Envie (or your notes) say, and only discovering bad credentials when the app runs.
+Developers keep several stacks for the same keys (local, staging, production). Switching by hand means editing `.env.local`, mixing values, or leaving a leftover file pointed at the wrong stack. Envie makes the switch wholesale and keeps the mount path stable.
 
 ---
 
 ## Core Workflow
 
 1. **Open a project folder** — Envie loads or creates `.envie/config.json` and `.envie/schema.json`.
-2. **Edit values per key and environment** — Use segmented toggles or the integration drawer.
-3. **Verify connections** — Background pings use real validators (TCP, HTTP, Supabase, Clerk, Mapbox, Resend).
-4. **Apply Changes** — A review modal shows before/after diff (secrets masked by default).
-5. **Confirm apply** — Envie snapshots the previous file to `.envie/history/` then writes the target `.env` file.
+2. **Edit values per key and profile** — Use the drawer to fill each profile.
+3. **Switch profile** — The top control remounts `.env.local` onto that profile.
+4. **Verify connections** — Background pings use real validators (TCP, HTTP, Supabase, Clerk, Mapbox, Resend).
+5. **Apply & Mount** — Review a before/after diff, then write profile files and refresh the mount.
+
+---
+
+## How the mount works
+
+- Profile files live at `.envie/profiles/<name>.env`.
+- The mount target defaults to `.env.local`.
+- Preferred mode is a **relative symlink**: `.env.local` → `.envie/profiles/<active>.env`.
+- If the OS refuses file symlinks (common on Windows without Developer Mode), Envie falls back to a **copy** of the active profile into `.env.local` and remembers `mount.mode: "copy"`.
+- Apps keep reading `.env.local`. Restart the process after a switch so `NEXT_PUBLIC_*` and similar values reload.
+- Multi-file monorepo mounts (web + api + middleware) are planned later. This release mounts one target.
 
 ---
 
@@ -28,11 +39,15 @@ Developers often maintain multiple environment-specific values for the same keys
 
 ### `.envie/config.json` (values and selections)
 
-Stores environment names, the workspace preset, and per-key values plus active environment selection.
+Stores profile names, the active profile, mount settings (`target`, `mode`), and per-key values.
 
 ### `.envie/schema.json` (contract and metadata)
 
-Stores per-key metadata: `required`, `type`, `note`, `validation`, and optional `group`. Seeded automatically from config and parsed `.env` files when missing.
+Stores per-key metadata: `required`, `type`, `note`, `validation`, and optional `group`.
+
+### `.envie/profiles/*.env` (compiled profile files)
+
+Rendered stacks that the mount target points at.
 
 ### `envie-global-config.json` (app user data)
 
@@ -60,17 +75,13 @@ Status mapping in the UI:
 - **Red** — Unreachable or network failure
 - **Gray** — Untested
 
-Unsupported services should use generic `http` until a dedicated validator exists.
-
 ---
 
 ## Apply Diff and History
 
-- **Before apply**: `preview-apply` compiles output and compares to the current target file.
-- **Diff UI**: Side-by-side panels inspired by [Magic UI Code Comparison](https://magicui.design/docs/components/code-comparison), implemented in vanilla JS (no React).
+- **Before apply / first remount over a plain file**: review before/after content.
 - **Secrets**: Masked in the diff by default; toggle to reveal.
-- **Validation**: Required keys and invalid validation types block **Apply**; **Apply Anyway** bypasses errors.
-- **History**: Each successful apply saves a snapshot under `.envie/history/`. Restore reverts the target file to the pre-apply contents.
+- **History**: Each successful apply or profile switch saves a snapshot under `.envie/history/`.
 
 ---
 
@@ -78,16 +89,17 @@ Unsupported services should use generic `http` until a dedicated validator exist
 
 - Context-isolated preload bridge (no Node in renderer).
 - Sensitive keys auto-masked in the workspace UI.
-- `.envie/` appended to `.gitignore` when a `.gitignore` exists.
+- `.envie/` and the mount target (`.env.local`) are appended to `.gitignore` when a `.gitignore` exists.
 - Atomic writes with `.bak` backups via `env-parser.safeWrite`.
 
 ---
 
 ## Known Limitations
 
+- One mount target per project for now.
 - Validators require network access; offline checks will report unreachable.
-- History restore only reverts the target env file, not in-memory Envie config.
-- No import/export packs, leak scanning, or cloud sync in this release.
+- History restore reverts the mount target file contents; it does not rebuild the symlink automatically.
+- No team sync, import/export packs, or leak scanning in this release.
 
 ---
 
@@ -95,6 +107,7 @@ Unsupported services should use generic `http` until a dedicated validator exist
 
 ```bash
 npm install
+npm test
 npm start
 ```
 
