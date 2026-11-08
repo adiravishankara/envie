@@ -81,6 +81,7 @@ function stripMetadataFromConfig(config, schema) {
   const cleaned = {
     environments: config.environments,
     activeEnvironment: config.activeEnvironment,
+    mount: config.mount || undefined,
     keys: {}
   };
 
@@ -98,6 +99,7 @@ function mergeSchemaIntoConfig(config, schema) {
   const merged = {
     environments: config.environments,
     activeEnvironment: config.activeEnvironment,
+    mount: config.mount || { target: '.env.local', mode: 'symlink' },
     keys: {}
   };
 
@@ -149,18 +151,19 @@ function ensureSchema(projectPath, config, parsedEnv) {
   return schema;
 }
 
-function validateBeforeApply(config, schema, activeEnv) {
+function validateBeforeApply(config, schema, activeEnv, options = {}) {
   const errors = [];
   const warnings = [];
   const env = activeEnv || config.activeEnvironment || 'local';
+  const useProfile = options.profile !== false;
 
   for (const [keyName, meta] of Object.entries(schema.keys || {})) {
     const keyData = config.keys?.[keyName];
-    const selectedEnv = keyData?.active || env;
+    const selectedEnv = useProfile ? env : (keyData?.active || env);
     const value = (keyData?.values && keyData.values[selectedEnv]) || '';
 
     if (meta.required && !String(value).trim()) {
-      errors.push({ key: keyName, message: `Required key "${keyName}" has no value for environment "${selectedEnv}"` });
+      errors.push({ key: keyName, message: `Required key "${keyName}" has no value for "${selectedEnv}"` });
     }
 
     const validationType = meta.validation?.type || 'none';
@@ -177,6 +180,10 @@ function validateBeforeApply(config, schema, activeEnv) {
     if (!schema.keys?.[keyName]) {
       warnings.push({ key: keyName, message: `Key "${keyName}" is not in schema (will be added on next save)` });
     }
+  }
+
+  if (!(config.environments || []).length) {
+    errors.push({ key: '', message: 'Add at least one environment profile before applying' });
   }
 
   return { errors, warnings, valid: errors.length === 0 };

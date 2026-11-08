@@ -4,6 +4,21 @@ All notable changes to the **Envie** project will be documented in this file.
 
 ---
 
+## [1.3.0] - 2026-11-08
+
+### Added
+- **Profile mount**: Environments are wholesale profiles. Compiled files live under `.envie/profiles/`.
+- **Stable `.env.local` mount**: Relative symlink to the active profile by default; copy fallback when symlinks are unavailable.
+- **`switch-profile` IPC**: Switching the top control remounts the active stack immediately (with a confirm diff when replacing a divergent plain file).
+- **Mount status UI**: Shows `.env.local → .envie/profiles/<profile>.env` (or copy mode).
+
+### Changed
+- Per-key live environment toggles removed from the workspace list; the active profile owns every key.
+- Apply flow writes all profile files and refreshes the mount instead of treating `.env.local` as the only source of truth.
+- `.env.local` is gitignored alongside `.envie/` when a `.gitignore` exists.
+
+---
+
 ## [1.2.0] - 2026-05-18
 
 ### Added

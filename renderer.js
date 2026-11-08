@@ -9,23 +9,34 @@ if (typeof window.api === 'undefined') {
     clearActiveProject: async () => ({ success: true }),
     loadProjectData: async (dir) => ({
       config: {
-        environments: ['local', 'dev', 'staging', 'production'],
+        environments: ['local', 'staging', 'production'],
         activeEnvironment: 'local',
+        mount: { target: '.env.local', mode: 'symlink' },
         keys: {
-          'NEXT_PUBLIC_SUPABASE_URL': { values: { 'local': 'https://local-sb.co', 'dev': 'https://dev-sb.co', 'staging': 'https://staging-sb.co', 'production': 'https://supabase.co' }, note: 'Supabase REST Endpoint', validation: { type: 'supabase' } },
-          'NEXT_PUBLIC_SUPABASE_ANON_KEY': { values: { 'local': 'eyJhbG...', 'dev': 'eyJhbG...', 'staging': 'eyJhbG...', 'production': 'eyJhbG...' }, note: 'Anon API Key', validation: { type: 'supabase' } },
-          'NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY': { values: { 'local': 'pk_test_clerk', 'dev': 'pk_dev_clerk', 'production': 'pk_prod_clerk' }, note: 'Clerk Client Publishable Key', validation: { type: 'clerk' } },
-          'CLERK_SECRET_KEY': { values: { 'local': 'sk_test_clerk', 'dev': 'sk_dev_clerk', 'production': 'sk_prod_clerk' }, note: 'Clerk Secret Backend Key', validation: { type: 'clerk' } },
-          'DATABASE_URL': { values: { 'local': 'postgresql://localhost:5432/db', 'dev': 'postgresql://pg.dev:5432/db', 'production': 'postgresql://postgres.neon.tech/db' }, note: 'Main Postgres DB url', validation: { type: 'tcp' } },
-          'MAPBOX_ACCESS_TOKEN': { values: { 'local': 'pk.mapbox.local', 'production': 'pk.mapbox.prod' }, note: 'Mapbox maps credential', validation: { type: 'mapbox' } },
-          'RESEND_API_KEY': { values: { 'local': 're_123_local', 'production': 're_123_prod' }, note: 'Resend transactional mail key', validation: { type: 'resend' } },
-          'GENERIC_API_TOKEN': { values: { 'local': 'token_local_123', 'dev': 'token_dev_123', 'production': 'token_prod_123' }, note: 'Generic server bearer token', validation: { type: 'http' } },
-          'PORT': { values: { 'local': '3000', 'dev': '4000', 'production': '8000' }, note: 'Server active listening port', validation: { type: 'none' } }
-        },
-        profiles: {}
+          'NEXT_PUBLIC_SUPABASE_URL': { values: { 'local': 'https://local-sb.co', 'staging': 'https://staging-sb.co', 'production': 'https://supabase.co' }, note: 'Supabase REST Endpoint', validation: { type: 'supabase' }, active: 'local' },
+          'NEXT_PUBLIC_SUPABASE_ANON_KEY': { values: { 'local': 'eyJhbG...', 'staging': 'eyJhbG...', 'production': 'eyJhbG...' }, note: 'Anon API Key', validation: { type: 'supabase' }, active: 'local' },
+          'NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY': { values: { 'local': 'pk_test_clerk', 'staging': 'pk_stg_clerk', 'production': 'pk_prod_clerk' }, note: 'Clerk Client Publishable Key', validation: { type: 'clerk' }, active: 'local' },
+          'CLERK_SECRET_KEY': { values: { 'local': 'sk_test_clerk', 'staging': 'sk_stg_clerk', 'production': 'sk_prod_clerk' }, note: 'Clerk Secret Backend Key', validation: { type: 'clerk' }, active: 'local' },
+          'DATABASE_URL': { values: { 'local': 'postgresql://localhost:5432/db', 'staging': 'postgresql://pg.stg:5432/db', 'production': 'postgresql://postgres.neon.tech/db' }, note: 'Main Postgres DB url', validation: { type: 'tcp' }, active: 'local' },
+          'MAPBOX_ACCESS_TOKEN': { values: { 'local': 'pk.mapbox.local', 'staging': '', 'production': 'pk.mapbox.prod' }, note: 'Mapbox maps credential', validation: { type: 'mapbox' }, active: 'local' },
+          'RESEND_API_KEY': { values: { 'local': 're_123_local', 'staging': '', 'production': 're_123_prod' }, note: 'Resend transactional mail key', validation: { type: 'resend' }, active: 'local' },
+          'GENERIC_API_TOKEN': { values: { 'local': 'token_local_123', 'staging': 'token_stg_123', 'production': 'token_prod_123' }, note: 'Generic server bearer token', validation: { type: 'http' }, active: 'local' },
+          'PORT': { values: { 'local': '3000', 'staging': '4000', 'production': '8000' }, note: 'Server active listening port', validation: { type: 'none' }, active: 'local' }
+        }
       },
       schema: { version: 1, keys: {} },
-      availableFiles: ['.env', '.env.local', '.env.development'],
+      mount: {
+        targetFile: '.env.local',
+        mode: 'symlink',
+        status: 'missing',
+        symlink: false,
+        linkTarget: null,
+        expectedLink: '.envie/profiles/local.env',
+        inSync: false,
+        needsReplace: false,
+        activeEnvironment: 'local'
+      },
+      availableFiles: ['.env.local'],
       activeTargetFile: '.env.local',
       externalDesync: false,
       parsedEnvLocal: null
@@ -38,9 +49,16 @@ if (typeof window.api === 'undefined') {
       validation: { errors: [], warnings: [], valid: true },
       hasChanges: true,
       targetFile: '.env.local',
-      activeEnvironment: 'local'
+      activeEnvironment: 'local',
+      mount: { mode: 'symlink', status: 'missing', expectedLink: '.envie/profiles/local.env' }
     }),
-    confirmApply: async () => ({ success: true, snapshotId: 'mock-snapshot' }),
+    confirmApply: async () => ({ success: true, snapshotId: 'mock-snapshot', mount: { mode: 'symlink', targetFile: '.env.local', linkTarget: '.envie/profiles/local.env' } }),
+    switchProfile: async (_path, _config, _schema, environment) => ({
+      success: true,
+      snapshotId: 'mock-switch',
+      config: null,
+      mount: { mode: 'symlink', targetFile: '.env.local', linkTarget: `.envie/profiles/${environment}.env` }
+    }),
     listApplyHistory: async () => [],
     restoreApplySnapshot: async () => ({ success: true, targetFile: '.env.local' }),
     getValidatorTypes: async () => [
@@ -59,12 +77,20 @@ if (typeof window.api === 'undefined') {
 let state = {
   activeProjectPath: null,
   recentProjects: [],
-  environments: ['local', 'test', 'deployment'],
+  environments: ['local', 'staging', 'production'],
   activeEnvironment: 'local',
   keys: {},
   schema: { version: 1, keys: {} },
   availableFiles: [],
   selectedTargetFile: '.env.local',
+  mount: {
+    targetFile: '.env.local',
+    mode: 'symlink',
+    status: 'missing',
+    linkTarget: null,
+    expectedLink: '',
+    inSync: false
+  },
   systemLogs: [],
   maskSecrets: true,
   unmaskedKeys: {}
@@ -183,8 +209,42 @@ function buildConfigPayload() {
   return {
     environments: state.environments,
     activeEnvironment: state.activeEnvironment,
+    mount: {
+      target: state.mount?.targetFile || state.selectedTargetFile || '.env.local',
+      mode: state.mount?.mode || 'symlink'
+    },
     keys: state.keys
   };
+}
+
+function applyMountState(mount) {
+  if (!mount) return;
+  state.mount = {
+    ...state.mount,
+    ...mount,
+    targetFile: mount.targetFile || mount.target || state.mount.targetFile
+  };
+  state.selectedTargetFile = state.mount.targetFile;
+  updateMountStatusUi();
+}
+
+function updateMountStatusUi() {
+  if (!targetEnvSelect) return;
+  const mode = state.mount?.mode || 'symlink';
+  const target = state.mount?.targetFile || '.env.local';
+  const link = state.mount?.linkTarget || state.mount?.expectedLink || `.envie/profiles/${state.activeEnvironment}.env`;
+  const label =
+    mode === 'symlink'
+      ? `${target} → ${link}`
+      : `${target} (copy of ${state.activeEnvironment})`;
+
+  targetEnvSelect.innerHTML = '';
+  const opt = document.createElement('option');
+  opt.value = target;
+  opt.innerText = label;
+  opt.selected = true;
+  targetEnvSelect.appendChild(opt);
+  targetEnvSelect.disabled = true;
 }
 
 function buildValidatorOptionsHtml(selectedType) {
@@ -224,22 +284,85 @@ function updateWorkspaceMeta() {
   if (verifiedStat) verifiedStat.innerText = `${verifiedCount}/${testableCount}`;
 }
 
-function getKeyActiveEnv(keyName) {
-  const keyData = state.keys[keyName];
-  if (!keyData) return state.activeEnvironment;
-  return keyData.active || state.activeEnvironment || state.environments[0];
+function getKeyActiveEnv(_keyName) {
+  return state.activeEnvironment || state.environments[0];
 }
 
-function setKeyActiveEnv(keyName, env) {
-  if (!state.keys[keyName] || !state.environments.includes(env)) return;
-  state.keys[keyName].active = env;
-}
+async function switchActiveProfile(env, options = {}) {
+  if (!state.activeProjectPath) {
+    state.activeEnvironment = env;
+    Object.keys(state.keys).forEach((keyName) => {
+      state.keys[keyName].active = env;
+    });
+    renderEnvironmentSlider();
+    renderServiceGroups();
+    return;
+  }
+  if (!state.environments.includes(env)) return;
+  if (env === state.activeEnvironment && state.mount?.inSync && !options.force) {
+    return;
+  }
 
-function applyEnvironmentPreset(env) {
+  const res = await window.api.switchProfile(
+    state.activeProjectPath,
+    buildConfigPayload(),
+    state.schema,
+    env,
+    options
+  );
+
+  if (res.needsConfirm && res.preview) {
+    openApplyDiffModal({
+      ...res.preview,
+      validation: res.validation || { errors: [], warnings: [], valid: true },
+      hasChanges: true,
+      pendingSwitch: env
+    });
+    return;
+  }
+
+  if (!res.success) {
+    if (res.validation?.errors?.length) {
+      openApplyDiffModal({
+        before: '',
+        after: '',
+        diffRows: [],
+        validation: res.validation,
+        hasChanges: false,
+        targetFile: state.mount.targetFile,
+        activeEnvironment: env,
+        pendingSwitch: env
+      });
+    }
+    logEvent(`Profile switch failed: ${res.error || 'unknown error'}`, 'ERROR');
+    showToast('Profile switch failed');
+    return;
+  }
+
   state.activeEnvironment = env;
-  Object.keys(state.keys).forEach(keyName => {
+  Object.keys(state.keys).forEach((keyName) => {
     state.keys[keyName].active = env;
   });
+  if (res.config) {
+    state.keys = res.config.keys || state.keys;
+    state.environments = res.config.environments || state.environments;
+    state.activeEnvironment = res.config.activeEnvironment || env;
+  }
+  applyMountState({
+    ...res.mount,
+    inSync: true,
+    status: res.mount?.mode === 'copy' ? 'copied' : 'linked',
+    expectedLink: res.mount?.linkTarget,
+    activeEnvironment: env
+  });
+  if (res.mount?.fallbackReason) {
+    logEvent(`Symlink unavailable, using copy mount: ${res.mount.fallbackReason}`, 'WARN');
+  }
+  logEvent(`Switched active profile to ${env}`, 'INFO');
+  renderEnvironmentSlider();
+  renderServiceGroups();
+  triggerBackgroundPings();
+  showToast(`Using ${env}`);
 }
 
 async function triggerBackgroundPings() {
@@ -565,18 +688,14 @@ function renderEnvironmentSlider() {
 
   const applyPreset = (env) => {
     if (!state.environments.includes(env)) return;
-    applyEnvironmentPreset(env);
-    logEvent(`Applied environment preset to all variables: ${env}`, 'INFO');
-    renderEnvironmentSlider();
-    renderServiceGroups();
-    triggerBackgroundPings();
+    switchActiveProfile(env);
   };
 
   if (total > 5) {
     const wrapper = document.createElement('div');
     wrapper.className = 'preset-select-wrap';
     wrapper.innerHTML = `
-      <label class="preset-select-label" for="global-env-preset">Preset</label>
+      <label class="preset-select-label" for="global-env-preset">Profile</label>
       <select class="preset-select dropdown-select" id="global-env-preset">
         ${state.environments.map(env => `
           <option value="${env}" ${state.activeEnvironment === env ? 'selected' : ''}>${env.charAt(0).toUpperCase() + env.slice(1)}</option>
@@ -681,21 +800,6 @@ function renderServiceGroups(filter = '') {
       const env = getKeyActiveEnv(key);
       const rawVal = state.keys[key].values[env] || '';
       const displayVal = state.unmaskedKeys[key] ? rawVal : '••••••••';
-      const useEnvDropdown = state.environments.length > 5;
-      const envOptions = useEnvDropdown
-        ? `
-          <label class="key-env-select-label" for="env-select-${toDomId(key)}">Environment</label>
-          <select class="key-env-select dropdown-select" id="env-select-${toDomId(key)}" data-key="${key}">
-            ${state.environments.map(envName => `
-              <option value="${envName}" ${envName === env ? 'selected' : ''}>${envName.charAt(0).toUpperCase() + envName.slice(1)}</option>
-            `).join('')}
-          </select>
-        `
-        : state.environments.map(envName => `
-          <button type="button" class="key-env-option ${envName === env ? 'active' : ''}" data-key="${key}" data-env="${envName}" aria-pressed="${envName === env ? 'true' : 'false'}">
-            ${envName.charAt(0).toUpperCase() + envName.slice(1)}
-          </button>
-        `).join('');
 
       row.innerHTML = `
         <div class="key-main">
@@ -712,43 +816,20 @@ function renderServiceGroups(filter = '') {
             </button>
           </div>
         </div>
-        <div class="key-env-switcher" aria-label="Environment for ${key}">
-          ${envOptions}
+        <div class="key-profile-badge" title="Value from active profile">
+          ${env}
         </div>
       `;
 
       row.onclick = (event) => {
-        if (event.target.closest('.key-env-switcher, .eye-btn')) {
+        if (event.target.closest('.eye-btn')) {
           return;
         }
         openDrawer(groupName, [key]);
       };
 
-      row.querySelectorAll('.key-env-option').forEach(btn => {
-        btn.onclick = (e) => {
-          e.stopPropagation();
-          setKeyActiveEnv(key, btn.getAttribute('data-env'));
-          renderEnvironmentSlider();
-          renderServiceGroups(filter);
-          triggerBackgroundPings();
-        };
-      });
-
-      const keyEnvSelect = row.querySelector('.key-env-select');
-      if (keyEnvSelect) {
-        keyEnvSelect.onchange = (e) => {
-          e.stopPropagation();
-          setKeyActiveEnv(key, e.target.value);
-          renderEnvironmentSlider();
-          renderServiceGroups(filter);
-          triggerBackgroundPings();
-        };
-        keyEnvSelect.onclick = (e) => e.stopPropagation();
-      }
-
-      // Attach Toggle Mask Eye click
       row.querySelector('.eye-btn').onclick = (e) => {
-        e.stopPropagation(); // Avoid opening drawer
+        e.stopPropagation();
         state.unmaskedKeys[key] = !state.unmaskedKeys[key];
         renderServiceGroups(filter);
       };
@@ -1030,10 +1111,18 @@ async function closeProject() {
   state.activeProjectPath = null;
   state.keys = {};
   state.schema = { version: 1, keys: {} };
-  state.environments = ['local', 'test', 'deployment'];
+  state.environments = ['local', 'staging', 'production'];
   state.activeEnvironment = 'local';
   state.availableFiles = [];
   state.selectedTargetFile = '.env.local';
+  state.mount = {
+    targetFile: '.env.local',
+    mode: 'symlink',
+    status: 'missing',
+    linkTarget: null,
+    expectedLink: '',
+    inSync: false
+  };
   connectionStatusCache = {};
 
   if (searchInput) searchInput.value = '';
@@ -1059,27 +1148,22 @@ async function loadProject(dir) {
     logEvent(`Loading workspace: ${dir}`);
     
     const data = await window.api.loadProjectData(dir);
+    if (data.error) throw new Error(data.error);
+
     state.keys = data.config.keys;
     state.schema = data.schema || { version: 1, keys: {} };
     state.environments = data.config.environments;
     state.activeEnvironment = data.config.activeEnvironment || 'local';
     state.availableFiles = data.availableFiles;
-    state.selectedTargetFile = data.activeTargetFile;
-
-    Object.keys(state.keys).forEach(key => {
-      if (!state.keys[key].active || !state.environments.includes(state.keys[key].active)) {
-        state.keys[key].active = state.activeEnvironment;
-      }
+    applyMountState(data.mount || {
+      targetFile: data.activeTargetFile || '.env.local',
+      mode: data.config.mount?.mode || 'symlink',
+      status: 'missing',
+      inSync: false
     });
 
-    // Populate target select
-    targetEnvSelect.innerHTML = '';
-    state.availableFiles.forEach(f => {
-      const opt = document.createElement('option');
-      opt.value = f;
-      opt.innerText = f;
-      if (f === state.selectedTargetFile) opt.selected = true;
-      targetEnvSelect.appendChild(opt);
+    Object.keys(state.keys).forEach((key) => {
+      state.keys[key].active = state.activeEnvironment;
     });
 
     renderEnvironmentSlider();
@@ -1087,19 +1171,24 @@ async function loadProject(dir) {
     triggerBackgroundPings();
     showToast('Project Loaded');
 
-    // Sync recent projects sidebar
     await refreshRecentProjects();
 
-    // Desync Check
     if (data.externalDesync && data.parsedEnvLocal) {
-      logEvent(`Cold boot desync detected. External changes found.`, 'WARN');
+      logEvent(`Mount target differs from the active Envie profile.`, 'WARN');
       syncModal.classList.add('show');
-      
+
       btnSyncImport.onclick = () => {
-        // Import new keys
         for (const [k, v] of Object.entries(data.parsedEnvLocal)) {
           if (!state.keys[k]) {
-            state.keys[k] = { values: {}, note: v.note, active: 'local', validation: { type: 'none' } };
+            state.keys[k] = {
+              values: {},
+              note: v.note,
+              active: state.activeEnvironment,
+              validation: { type: 'none' }
+            };
+            state.environments.forEach((env) => {
+              state.keys[k].values[env] = '';
+            });
             getKeySchema(k).note = v.note || '';
           }
           state.keys[k].values[state.activeEnvironment] = v.value;
@@ -1107,13 +1196,14 @@ async function loadProject(dir) {
         syncModal.classList.remove('show');
         renderServiceGroups();
         triggerBackgroundPings();
-        logEvent('External changes synced into Envie database.', 'INFO');
-        showToast('Synced successfully');
+        logEvent('Imported mount-target values into the active profile.', 'INFO');
+        showToast('Synced into active profile');
       };
 
-      btnSyncOverwrite.onclick = () => {
+      btnSyncOverwrite.onclick = async () => {
         syncModal.classList.remove('show');
-        logEvent('Opted to overwrite external changes on next save.', 'INFO');
+        await switchActiveProfile(state.activeEnvironment, { force: true, confirmedReplace: true });
+        logEvent('Remounted active profile over the existing target file.', 'INFO');
       };
     }
   } catch (err) {
@@ -1286,59 +1376,55 @@ btnApplyCancel.addEventListener('click', closeApplyDiffModal);
 btnCloseApplyDiff.addEventListener('click', closeApplyDiffModal);
 applyRevealSecrets.addEventListener('change', renderApplyDiffModal);
 
-btnApplyConfirm.addEventListener('click', async () => {
+async function finishApply(force) {
   if (!applyPreviewCache || !state.activeProjectPath) return;
-  btnApplyConfirm.disabled = true;
+
+  if (applyPreviewCache.pendingSwitch) {
+    await switchActiveProfile(applyPreviewCache.pendingSwitch, {
+      force: true,
+      confirmedReplace: true
+    });
+    closeApplyDiffModal();
+    return;
+  }
+
   const res = await window.api.confirmApply(
     state.activeProjectPath,
     buildConfigPayload(),
     state.schema,
     applyPreviewCache.targetFile,
-    { force: false }
+    { force }
   );
-  btnApplyConfirm.disabled = false;
 
   if (res.success) {
-    logEvent(`Applied to ${applyPreviewCache.targetFile} (snapshot ${res.snapshotId})`, 'INFO');
-    showToast(`Applied to ${applyPreviewCache.targetFile}`);
+    applyMountState({
+      ...res.mount,
+      inSync: true,
+      status: res.mount?.mode === 'copy' ? 'copied' : 'linked',
+      expectedLink: res.mount?.linkTarget
+    });
+    logEvent(`Mounted ${applyPreviewCache.targetFile} (snapshot ${res.snapshotId})`, force ? 'WARN' : 'INFO');
+    showToast(`Mounted ${applyPreviewCache.targetFile}`);
     closeApplyDiffModal();
     await loadProject(state.activeProjectPath);
   } else {
     logEvent(`Apply failed: ${res.error}`, 'ERROR');
     showToast('Apply failed');
   }
+}
+
+btnApplyConfirm.addEventListener('click', async () => {
+  btnApplyConfirm.disabled = true;
+  await finishApply(false);
+  btnApplyConfirm.disabled = false;
 });
 
 btnApplyForce.addEventListener('click', async () => {
-  if (!applyPreviewCache || !state.activeProjectPath) return;
-  const res = await window.api.confirmApply(
-    state.activeProjectPath,
-    buildConfigPayload(),
-    state.schema,
-    applyPreviewCache.targetFile,
-    { force: true }
-  );
-
-  if (res.success) {
-    logEvent(`Force-applied to ${applyPreviewCache.targetFile} (snapshot ${res.snapshotId})`, 'WARN');
-    showToast(`Applied to ${applyPreviewCache.targetFile}`);
-    closeApplyDiffModal();
-    await loadProject(state.activeProjectPath);
-  } else {
-    logEvent(`Force apply failed: ${res.error}`, 'ERROR');
-    showToast('Apply failed');
-  }
+  await finishApply(true);
 });
 
 btnSaveEnv.addEventListener('click', async () => {
   if (!state.activeProjectPath) return;
-
-  const targetFile = targetEnvSelect.value;
-  if (!targetFile || targetFile === '.envie') {
-    showToast('Invalid target output file');
-    logEvent('Error: Target output file cannot be empty or .envie', 'ERROR');
-    return;
-  }
 
   const oldText = btnSaveEnv.innerHTML;
   btnSaveEnv.innerText = 'Preparing...';
@@ -1346,8 +1432,7 @@ btnSaveEnv.addEventListener('click', async () => {
   const preview = await window.api.previewApply(
     state.activeProjectPath,
     buildConfigPayload(),
-    state.schema,
-    targetFile
+    state.schema
   );
 
   btnSaveEnv.innerHTML = oldText;
@@ -1359,11 +1444,6 @@ btnSaveEnv.addEventListener('click', async () => {
   }
 
   openApplyDiffModal(preview);
-});
-
-targetEnvSelect.addEventListener('change', (e) => {
-  state.selectedTargetFile = e.target.value;
-  logEvent(`Target output file changed to ${e.target.value}`);
 });
 
 // Init Version Watermark & Boot App

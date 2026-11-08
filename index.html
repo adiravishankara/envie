@@ -104,7 +104,7 @@
             </button>
             <button class="btn btn-primary" id="btn-save-env">
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/></svg>
-              Apply Changes
+              Apply & Mount
             </button>
           </div>
         </div>
@@ -116,7 +116,7 @@
             <strong class="summary-value" id="key-count-stat">0</strong>
           </div>
           <div class="summary-item">
-            <span class="summary-label">Environments</span>
+            <span class="summary-label">Profiles</span>
             <strong class="summary-value" id="env-count-stat">3</strong>
           </div>
           <div class="summary-item">
@@ -132,15 +132,15 @@
         <!-- Row 2: Dashboard Controls Toolbar Card -->
         <div class="dashboard-controls-card">
           <div class="control-group">
-            <label class="control-label">Target Output File</label>
-            <select id="target-env-file" class="dropdown-select">
+            <label class="control-label">Active Mount</label>
+            <select id="target-env-file" class="dropdown-select" disabled title="Apps keep reading this path. Envie points it at the active profile.">
               <option value=".env.local">.env.local</option>
             </select>
           </div>
 
           <div class="secondary-actions">
             <button class="btn btn-secondary" id="btn-import-template">Import Template</button>
-            <button class="btn btn-secondary" id="btn-manage-envs">Manage Environments</button>
+            <button class="btn btn-secondary" id="btn-manage-envs">Manage Profiles</button>
           </div>
         </div>
 
@@ -148,7 +148,7 @@
         <div class="workspace-grid-controls">
           <!-- Environment Stepped Slider Card -->
           <div class="env-slider-card">
-            <div class="slider-title">Apply Environment Preset To All Keys</div>
+            <div class="slider-title">Active Profile</div>
             <div class="env-slider-container">
               <div class="slider-labels" id="slider-labels">
                 <!-- Dynamically populated e.g. Local, Test, Dev, Deployment -->
@@ -217,12 +217,12 @@
         <h3 id="modal-title" style="color:#d97706;">External Change Detected</h3>
       </div>
       <div style="padding: 20px; font-size: 14px; color:#4b5563; line-height: 1.5;">
-        <p>We noticed your target file was modified outside of Envie.</p>
-        <p>Would you like to <strong>Sync</strong> these changes into Envie, or <strong>Overwrite</strong> the file with Envie's current active layout?</p>
+        <p>Your mount target no longer matches the active Envie profile.</p>
+        <p>Import those values into the active profile, or remount the profile over the target file.</p>
       </div>
       <div class="modal-actions">
-        <button type="button" class="btn btn-secondary" id="btn-sync-overwrite">Overwrite File</button>
-        <button type="button" class="btn btn-primary" id="btn-sync-import">Import & Sync</button>
+        <button type="button" class="btn btn-secondary" id="btn-sync-overwrite">Remount Profile</button>
+        <button type="button" class="btn btn-primary" id="btn-sync-import">Import Into Profile</button>
       </div>
     </div>
   </div>
@@ -231,18 +231,18 @@
   <div class="modal-backdrop" id="env-modal-container">
     <div class="modal-card">
       <div class="modal-header">
-        <h3>Manage Project Environments</h3>
+        <h3>Manage Profiles</h3>
         <button class="modal-close" id="btn-close-env-modal">&times;</button>
       </div>
       <div class="modal-body" style="padding: 20px;">
         <div class="form-group" style="margin-bottom:16px;">
-          <label style="font-size:13px; font-weight:600; display:block; margin-bottom:6px; color: var(--text-primary);">Add New Environment</label>
+          <label style="font-size:13px; font-weight:600; display:block; margin-bottom:6px; color: var(--text-primary);">Add New Profile</label>
           <div style="display:flex; gap:10px;">
             <input type="text" id="new-env-input" class="dropdown-select" style="flex:1;" placeholder="e.g. staging">
             <button class="btn btn-primary" id="btn-add-env">+ Add</button>
           </div>
         </div>
-        <label style="font-size:13px; font-weight:600; display:block; margin-bottom:6px; color: var(--text-primary);">Current Environments</label>
+        <label style="font-size:13px; font-weight:600; display:block; margin-bottom:6px; color: var(--text-primary);">Current Profiles</label>
         <ul id="env-list-items" class="env-manage-list" style="list-style: none; padding: 0; margin: 0; max-height: 200px; overflow-y: auto; border: 1px solid var(--border-color); border-radius: 6px;">
           <!-- Dynamically populated in renderer.js -->
         </ul>
@@ -289,6 +289,6 @@
   <script src="secret-mask.js"></script>
   <script src="env-diff.js"></script>
   <script src="code-comparison.js"></script>
-  <script src="renderer.js?v=16"></script>
+  <script src="renderer.js?v=17"></script>
 </body>
 </html>
